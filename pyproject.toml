@@ -1,0 +1,27 @@
+[project]
+name = "aip-core"
+version = "0.1.0"
+description = "文经客 AIP 超级个体 OPC 平台 - 分层多Agent协作系统核心"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "langgraph>=1.0",
+    "crewai>=1.14",
+    "langchain-core>=0.3",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic>=2.10",
+    "sqlite-utils>=3.38",
+    "httpx>=0.28",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "httpx-ws>=0.6",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

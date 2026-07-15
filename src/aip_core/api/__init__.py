@@ -1,0 +1,932 @@
+"""FastAPI 应用 - 课程生成 API
+
+T1.5 需求解析 API 对接前端：
+- POST /api/course/create  创建课程生成会话
+- POST /api/course/{session_id}/message  发送对话消息
+- POST /api/course/{session_id}/hitl/action  HITL 确认操作
+- GET  /api/course/{session_id}/progress  轮询进度
+- GET  /api/course/{session_id}/resume  恢复会话
+- GET  /api/course/sessions  列出用户会话
+"""
+
+import json
+import uuid
+import time
+import sqlite3
+import threading
+from typing import Optional
+from pathlib import Path
+
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
+
+from ..graph import CourseState, build_course_graph, create_sqlite_checkpointer
+from ..graph.state import HITL_DEFINITIONS, ALL_NODES
+from ..config import MAX_CONCURRENT_SESSIONS, SQLITE_DB_PATH
+from ..content_safety import check_user_input, check_ai_output
+
+# ============================================================
+# Pydantic 模型
+# ============================================================
+
+class CreateCourseRequest(BaseModel):
+    initial_message: str = Field(..., description="用户初始需求描述")
+    user_id: str = Field(default="anonymous", description="用户 ID")
+
+class CreateCourseResponse(BaseModel):
+    session_id: str
+    stage: str
+    agent_message: Optional[str] = None
+    profile: Optional[dict] = None
+    hitl: Optional[dict] = None
+    need_followup: bool = False
+
+class MessageRequest(BaseModel):
+    message: str = Field(..., description="用户回复消息")
+
+class HitlActionRequest(BaseModel):
+    hitl_id: str = Field(..., description="HITL 确认点 ID，如 HITL-1")
+    action: str = Field(..., description="操作：confirm/skip/regenerate/edit/skip_all")
+    edits: Optional[dict] = Field(default=None, description="编辑内容(action=edit时)")
+
+class ProgressResponse(BaseModel):
+    session_id: str
+    stages: list[dict]
+    current_hitl: Optional[dict] = None
+    estimated_remaining_seconds: Optional[int] = None
+    is_complete: bool = False
+
+# ============================================================
+# 应用初始化
+# ============================================================
+
+app = FastAPI(
+    title="文经客 AIP OPC 核心 API",
+    description="分层多Agent协作系统 - 课程生成引擎（MiniMax 语音克隆 + Duix-Avatar 数字人）",
+    version="0.3.0",
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# 全局：编译后的 Graph + Checkpointer（启动时初始化）
+_graph = None
+_checkpointer = None
+
+# ============================================================
+# SQLite 会话持久化层
+# ============================================================
+
+class SessionStore:
+    """SQLite 会话持久化存储
+
+    替代内存 _session_cache，解决服务重启丢数据问题。
+    线程安全（每线程一个连接），自动建表，支持 JSON 序列化。
+    """
+
+    def __init__(self, db_path: str = None):
+        self._db_path = db_path or SQLITE_DB_PATH
+        self._local = threading.local()
+        self._init_db()
+
+    def _get_conn(self) -> sqlite3.Connection:
+        """获取当前线程的数据库连接（自动创建）"""
+        if not hasattr(self._local, "conn") or self._local.conn is None:
+            Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
+            conn = sqlite3.connect(self._db_path, check_same_thread=False)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            self._local.conn = conn
+        return self._local.conn
+
+    def _init_db(self):
+        """初始化数据库表"""
+        conn = self._get_conn()
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS sessions (
+                session_id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                state_json TEXT NOT NULL DEFAULT '{}',
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                completed INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_sessions_user_id
+            ON sessions(user_id)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_sessions_created_at
+            ON sessions(created_at)
+        """)
+        conn.commit()
+
+    def save(self, session_id: str, state: dict, user_id: str = "anonymous",
+             completed: bool = False, created_at: float = None):
+        """保存或更新会话（UPSERT）"""
+        now = time.time()
+        state_json = json.dumps(state, ensure_ascii=False, default=str)
+        conn = self._get_conn()
+        conn.execute("""
+            INSERT INTO sessions (session_id, user_id, state_json, created_at, updated_at, completed)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(session_id) DO UPDATE SET
+                state_json = excluded.state_json,
+                updated_at = excluded.updated_at,
+                completed = excluded.completed
+        """, (
+            session_id,
+            user_id,
+            state_json,
+            created_at or now,
+            now,
+            1 if completed else 0,
+        ))
+        conn.commit()
+
+    def get(self, session_id: str) -> Optional[dict]:
+        """获取单个会话"""
+        conn = self._get_conn()
+        row = conn.execute(
+            "SELECT * FROM sessions WHERE session_id = ?", (session_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "state": json.loads(row["state_json"]),
+            "user_id": row["user_id"],
+            "created_at": row["created_at"],
+            "completed": bool(row["completed"]),
+        }
+
+    def list_by_user(self, user_id: str) -> list[dict]:
+        """列出用户的所有会话"""
+        conn = self._get_conn()
+        rows = conn.execute(
+            "SELECT * FROM sessions WHERE user_id = ? ORDER BY created_at DESC",
+            (user_id,)
+        ).fetchall()
+        return [
+            {
+                "state": json.loads(r["state_json"]),
+                "user_id": r["user_id"],
+                "created_at": r["created_at"],
+                "completed": bool(r["completed"]),
+            }
+            for r in rows
+        ]
+
+    def count_active_by_user(self, user_id: str) -> int:
+        """统计用户活跃会话数（未完成）"""
+        conn = self._get_conn()
+        row = conn.execute(
+            "SELECT COUNT(*) as cnt FROM sessions WHERE user_id = ? AND completed = 0",
+            (user_id,)
+        ).fetchone()
+        return row["cnt"]
+
+    def total_sessions(self) -> int:
+        """总会话数"""
+        conn = self._get_conn()
+        return conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+
+    def active_sessions(self) -> int:
+        """活跃会话数"""
+        conn = self._get_conn()
+        return conn.execute(
+            "SELECT COUNT(*) FROM sessions WHERE completed = 0"
+        ).fetchone()[0]
+
+    def cleanup_expired(self, max_age_seconds: float = 86400 * 7):
+        """清理过期会话（默认 7 天）"""
+        cutoff = time.time() - max_age_seconds
+        conn = self._get_conn()
+        conn.execute(
+            "DELETE FROM sessions WHERE updated_at < ?", (cutoff,)
+        )
+        conn.commit()
+
+
+# 全局 SessionStore 实例
+_session_store = SessionStore()
+
+
+def get_graph():
+    """懒加载 Graph"""
+    global _graph, _checkpointer
+    if _graph is None:
+        _checkpointer = create_sqlite_checkpointer()
+        _graph = build_course_graph(checkpointer=_checkpointer)
+    return _graph, _checkpointer
+
+
+# ============================================================
+# 会话管理
+# ============================================================
+
+def _create_initial_state(session_id: str, user_id: str, initial_message: str) -> CourseState:
+    """创建初始 CourseState"""
+    return CourseState(
+        session_id=session_id,
+        user_id=user_id,
+        current_node="",
+        user_profile=None,
+        requirement_completeness=0,
+        followup_rounds=0,
+        ip_positioning=None,
+        course_outline=None,
+        scripts=None,
+        slides=None,
+        cases=None,
+        marketing_copy=None,
+        pricing_plan=None,
+        review_score=None,
+        review_detail=None,
+        review_round=0,
+        hitl_status={hid: "pending" for hid in HITL_DEFINITIONS},
+        skip_all_hitl=False,
+        errors=[],
+        node_history=[],
+        messages=[{"role": "user", "content": initial_message, "timestamp": time.time()}],
+    )
+
+
+def _get_node_order(node_name: str) -> int:
+    """获取节点在流程中的顺序"""
+    try:
+        return ALL_NODES.index(node_name)
+    except ValueError:
+        return 99
+
+
+# ============================================================
+# API 路由
+# ============================================================
+
+@app.post("/api/course/create", response_model=CreateCourseResponse)
+async def create_course(request: CreateCourseRequest):
+    """创建课程生成会话 - 发起需求解析"""
+    user_id = request.user_id
+
+    # 内容安全审核：用户输入
+    safety_result = check_user_input(request.initial_message)
+    if not safety_result.passed:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "content_safety_violation", "message": safety_result.message}
+        )
+
+    # 检查并发限制
+    active_count = _session_store.count_active_by_user(user_id)
+    if active_count >= MAX_CONCURRENT_SESSIONS:
+        raise HTTPException(
+            status_code=429,
+            detail=f"同时进行的课程生成已达上限 ({MAX_CONCURRENT_SESSIONS})，请等待现有任务完成"
+        )
+
+    session_id = str(uuid.uuid4())[:8]
+    state = _create_initial_state(session_id, user_id, request.initial_message)
+
+    # 运行需求解析
+    from ..agents.requirement_agent import run_requirement_analysis
+    state = run_requirement_analysis(state)
+
+    # 持久化到 SQLite
+    _session_store.save(session_id, state, user_id=user_id, completed=False)
+
+    # 构建响应
+    messages = state.get("messages", [])
+    last_assistant_msg = ""
+    need_followup = False
+    for msg in reversed(messages):
+        if isinstance(msg, dict) and msg.get("role") == "assistant":
+            last_assistant_msg = msg.get("content", "")
+            need_followup = msg.get("type") == "followup"
+            break
+
+    hitl_status = state.get("hitl_status", {}).get("HITL-1")
+    hitl = None
+    if hitl_status == "pending":
+        hitl = {"hitl_id": "HITL-1", "label": "需求解析确认", "status": "pending"}
+
+    return CreateCourseResponse(
+        session_id=session_id,
+        stage="requirement_analysis" if not need_followup else "asking",
+        agent_message=last_assistant_msg,
+        profile=state.get("user_profile"),
+        hitl=hitl,
+        need_followup=need_followup,
+    )
+
+
+@app.post("/api/course/{session_id}/message")
+async def send_message(session_id: str, request: MessageRequest):
+    """发送对话消息 - 用于追问回复或继续流程"""
+    # 内容安全审核：用户消息
+    safety_result = check_user_input(request.message)
+    if not safety_result.passed:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "content_safety_violation", "message": safety_result.message}
+        )
+
+    session = _session_store.get(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="会话不存在或已过期")
+
+    state = session["state"]
+    user_id = session.get("user_id", "anonymous")
+
+    # 追加用户消息
+    state["messages"] = state.get("messages", []) + [
+        {"role": "user", "content": request.message, "timestamp": time.time()}
+    ]
+
+    current_node = state.get("current_node", "")
+
+    # 如果在追问阶段，重新运行需求解析
+    if state.get("hitl_status", {}).get("HITL-1") == "asking":
+        from ..agents.requirement_agent import run_requirement_analysis
+        state = run_requirement_analysis(state)
+
+        messages = state.get("messages", [])
+        last_assistant_msg = ""
+        need_followup = False
+        for msg in reversed(messages):
+            if isinstance(msg, dict) and msg.get("role") == "assistant":
+                last_assistant_msg = msg.get("content", "")
+                need_followup = msg.get("type") == "followup"
+                break
+
+        _session_store.save(session_id, state, user_id=user_id, completed=False)
+
+        hitl_status = state.get("hitl_status", {}).get("HITL-1")
+        hitl = None
+        if hitl_status == "pending":
+            hitl = {"hitl_id": "HITL-1", "label": "需求解析确认", "status": "pending"}
+
+        return CreateCourseResponse(
+            session_id=session_id,
+            stage="requirement_analysis" if not need_followup else "asking",
+            agent_message=last_assistant_msg,
+            profile=state.get("user_profile"),
+            hitl=hitl,
+            need_followup=need_followup,
+        )
+
+    return {"session_id": session_id, "status": "ok", "message": "消息已接收"}
+
+
+@app.post("/api/course/{session_id}/hitl/action")
+async def hitl_action(session_id: str, request: HitlActionRequest):
+    """HITL 确认点操作"""
+    session = _session_store.get(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="会话不存在或已过期")
+
+    state = session["state"]
+    user_id = session.get("user_id", "anonymous")
+    hitl_id = request.hitl_id
+
+    if hitl_id not in HITL_DEFINITIONS:
+        raise HTTPException(status_code=400, detail=f"无效的 HITL ID: {hitl_id}")
+
+    # 处理用户操作
+    if request.action == "skip_all":
+        state["skip_all_hitl"] = True
+
+    # 更新 HITL 状态
+    if request.action == "edit" and request.edits:
+        # 应用编辑
+        node_name = HITL_DEFINITIONS[hitl_id]["node"]
+        if node_name == "requirement_analysis" and "user_profile" in request.edits:
+            state["user_profile"] = request.edits["user_profile"]
+        elif node_name == "ip_positioning" and "ip_positioning" in request.edits:
+            state["ip_positioning"] = request.edits["ip_positioning"]
+        elif node_name == "course_architecture" and "course_outline" in request.edits:
+            state["course_outline"] = request.edits["course_outline"]
+
+    # 标记 HITL 状态
+    status_map = {
+        "confirm": "confirmed",
+        "skip": "skipped",
+        "regenerate": "regenerating",
+        "edit": "confirmed",
+        "skip_all": "skipped",
+    }
+    state["hitl_status"][hitl_id] = status_map.get(request.action, "confirmed")
+
+    # 推进到下一个节点
+    hitl_order = HITL_DEFINITIONS[hitl_id]["order"]
+
+    if request.action == "regenerate":
+        # 回到当前 HITL 对应的节点重新生成
+        node_name = HITL_DEFINITIONS[hitl_id]["node"]
+        _run_node(state, node_name)
+    else:
+        # 推进到下一个节点
+        _advance_to_next(state, hitl_order)
+
+    _session_store.save(session_id, state, user_id=user_id, completed=False)
+
+    # 检查是否全部完成
+    is_complete = state.get("current_node") == "packaging"
+
+    return {
+        "session_id": session_id,
+        "action": request.action,
+        "current_stage": state.get("current_node", ""),
+        "is_complete": is_complete,
+        "next_hitl": _get_next_pending_hitl(state),
+    }
+
+
+@app.get("/api/course/{session_id}/progress", response_model=ProgressResponse)
+async def get_progress(session_id: str):
+    """轮询课程生成进度"""
+    session = _session_store.get(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="会话不存在或已过期")
+
+    state = session["state"]
+    user_id = session.get("user_id", "anonymous")
+    current_node = state.get("current_node", "")
+    hitl_status = state.get("hitl_status", {})
+
+    # 构建阶段状态
+    stages = []
+    current_found = False
+    for node_name in ALL_NODES:
+        node_order = _get_node_order(node_name)
+        current_order = _get_node_order(current_node)
+
+        if node_order < current_order:
+            status = "completed"
+        elif node_order == current_order:
+            status = "running"
+            current_found = True
+        else:
+            status = "pending" if current_found else "pending"
+
+        stages.append({
+            "name": node_name,
+            "label": _node_label(node_name),
+            "status": status,
+        })
+
+    # 当前 HITL
+    current_hitl = _get_next_pending_hitl(state)
+
+    # 估算剩余时间
+    remaining_nodes = len([s for s in stages if s["status"] == "pending"])
+    estimated_remaining = remaining_nodes * 45  # 每节点约 45 秒
+
+    is_complete = state.get("current_node") == "packaging"
+    if is_complete:
+        _session_store.save(session_id, state, user_id=user_id, completed=True)
+
+    return ProgressResponse(
+        session_id=session_id,
+        stages=stages,
+        current_hitl=current_hitl,
+        estimated_remaining_seconds=estimated_remaining if not is_complete else 0,
+        is_complete=is_complete,
+    )
+
+
+@app.get("/api/course/sessions")
+async def list_sessions(user_id: str = Query(..., description="用户 ID")):
+    """列出用户的所有会话"""
+    sessions = _session_store.list_by_user(user_id)
+    user_sessions = []
+    for s in sessions:
+        state = s["state"]
+        outline = state.get("course_outline") or {}
+        user_sessions.append({
+            "session_id": state.get("session_id", ""),
+            "stage": state.get("current_node", "init"),
+            "created_at": s.get("created_at"),
+            "completed": s.get("completed", False),
+            "course_title": outline.get("course_title", ""),
+        })
+    return {"sessions": user_sessions}
+
+
+@app.get("/api/course/{session_id}/resume")
+async def resume_session(session_id: str):
+    """恢复会话"""
+    session = _session_store.get(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="会话不存在或已过期")
+
+    state = session["state"]
+    return {
+        "session_id": session_id,
+        "stage": state.get("current_node", ""),
+        "next_hitl": _get_next_pending_hitl(state),
+        "is_complete": state.get("current_node") == "packaging",
+    }
+
+
+# ============================================================
+# 辅助函数
+# ============================================================
+
+def _node_label(node_name: str) -> str:
+    """节点中文标签"""
+    labels = {
+        "requirement_analysis": "需求解析",
+        "ip_positioning": "IP定位",
+        "course_architecture": "课程架构",
+        "content_production_parallel": "内容生产(讲稿/课件/案例)",
+        "content_production_serial": "内容生产(营销/定价)",
+        "voice_tts": "语音合成",
+        "digital_human": "数字人视频",
+        "quality_review": "质量审核",
+        "packaging": "打包交付",
+    }
+    return labels.get(node_name, node_name)
+
+
+def _run_node(state: CourseState, node_name: str):
+    """执行指定节点"""
+    from ..agents import (
+        run_requirement_analysis, run_ip_positioning,
+        run_course_architecture, run_content_parallel,
+        run_content_serial, run_voice_tts,
+        run_digital_human,
+        run_quality_review, run_packaging,
+    )
+    node_funcs = {
+        "requirement_analysis": run_requirement_analysis,
+        "ip_positioning": run_ip_positioning,
+        "course_architecture": run_course_architecture,
+        "content_production_parallel": run_content_parallel,
+        "content_production_serial": run_content_serial,
+        "voice_tts": run_voice_tts,
+        "digital_human": run_digital_human,
+        "quality_review": run_quality_review,
+        "packaging": run_packaging,
+    }
+    func = node_funcs.get(node_name)
+    if func:
+        func(state)
+
+
+def _advance_to_next(state: CourseState, current_hitl_order: int):
+    """推进到下一个 HITL 对应的节点
+
+    节点执行顺序与 LangGraph 编排边一致：
+    requirement_analysis → ip_positioning → course_architecture
+    → content_production_parallel → content_production_serial
+    → quality_review → packaging
+    """
+    # 完整的节点执行序列（与 LangGraph StateGraph 边一致）
+    full_sequence = [
+        "ip_positioning",
+        "course_architecture",
+        "content_production_parallel",
+        "content_production_serial",
+        "voice_tts",
+        "digital_human",
+        "quality_review",
+        "packaging",
+    ]
+
+    # 计算从当前 HITL 之后应该执行哪些节点
+    # HITL-1 对应 requirement_analysis 之后，从 ip_positioning 开始
+    # HITL-2 对应 ip_positioning 之后，从 course_architecture 开始
+    # 以此类推...
+    # current_hitl_order 从 1 开始，执行 full_sequence 中索引 >= current_hitl_order 的节点
+    # 但要注意：HITL-1 的 order=1，对应 full_sequence[0]（ip_positioning）
+
+    start_idx = current_hitl_order  # HITL-1 → idx=1 → full_sequence[1]="course_architecture"
+                                     # 但我们想从 ip_positioning 开始，即 full_sequence[0]
+    # 修正：HITL-N 确认后，应执行 full_sequence[N-1] 开始的节点
+    start_idx = current_hitl_order - 1
+
+    # 如果不是 skip_all，只执行紧邻的下一个节点
+    if not state.get("skip_all_hitl"):
+        if start_idx < len(full_sequence):
+            node_name = full_sequence[start_idx]
+            _run_node(state, node_name)
+            state["current_node"] = node_name
+        return
+
+    # skip_all：依次执行所有剩余节点，每个节点的输出会传递到下一个
+    for i in range(start_idx, len(full_sequence)):
+        node_name = full_sequence[i]
+        try:
+            _run_node(state, node_name)
+            state["current_node"] = node_name
+        except Exception as e:
+            # 单节点失败不阻断后续节点
+            state["errors"] = state.get("errors", []) + [{
+                "node": node_name,
+                "error": str(e),
+            }]
+
+
+def _get_next_pending_hitl(state: CourseState) -> Optional[dict]:
+    """获取下一个待处理的 HITL"""
+    hitl_status = state.get("hitl_status", {})
+    if state.get("skip_all_hitl"):
+        return None
+
+    for hid in sorted(HITL_DEFINITIONS.keys(), key=lambda h: HITL_DEFINITIONS[h]["order"]):
+        if hitl_status.get(hid) == "pending":
+            return {
+                "hitl_id": hid,
+                "label": HITL_DEFINITIONS[hid]["label"],
+                "status": "pending",
+            }
+    return None
+
+
+# ============================================================
+# M5: 打包下载
+# ============================================================
+
+@app.get("/api/course/{session_id}/download")
+async def download_package(session_id: str):
+    """下载课程 ZIP 包"""
+    from fastapi.responses import FileResponse
+    from pathlib import Path
+
+    session = _session_store.get(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="会话不存在或已过期")
+
+    package_path = session.get("state", {}).get("_package_path")
+    if not package_path or not Path(package_path).exists():
+        raise HTTPException(status_code=404, detail="课程包尚未生成，请等待打包完成")
+
+    outline = session.get("state", {}).get("course_outline", {})
+    title = outline.get("course_title", "课程包")
+    safe_title = title.replace(" ", "_").replace("/", "_")[:50]
+
+    return FileResponse(
+        path=package_path,
+        filename=f"{safe_title}.zip",
+        media_type="application/zip",
+    )
+
+
+# ============================================================
+# M5: MCP Server 管理
+# ============================================================
+
+@app.get("/api/mcp/status")
+async def mcp_status():
+    """获取所有 MCP Server 状态"""
+    from ..mcp_servers import mcp_registry
+    return {"servers": mcp_registry.get_all_status()}
+
+
+@app.post("/api/mcp/health-check")
+async def mcp_health_check():
+    """对所有 MCP Server 执行健康检查"""
+    from ..mcp_servers import mcp_registry
+    results = await mcp_registry.health_check_all()
+    return {"results": results, "servers": mcp_registry.get_all_status()}
+
+
+# ============================================================
+# Voice: 语音合成
+# ============================================================
+
+@app.get("/api/voices")
+async def list_voices():
+    """获取可用 TTS 语音列表（自动检测 CosyVoice2 或 Edge TTS）"""
+    import os
+    from ..tools.tts_factory import get_available_voices
+    api_key = os.getenv("SILICONFLOW_API_KEY", "")
+    return {"voices": get_available_voices(api_key=api_key)}
+
+
+class VoiceCloneRequest(BaseModel):
+    audio_base64: str = Field(..., description="参考音频 base64 编码")
+    audio_name: str = Field(default="reference.mp3", description="音频文件名")
+    text: str = Field(default="", description="参考音频对应文本")
+
+
+class VoiceTestRequest(BaseModel):
+    voice: str = Field(..., description="音色 ID")
+    text: str = Field(..., description="试听文本")
+
+
+@app.post("/api/voice/clone")
+async def voice_clone(request: VoiceCloneRequest):
+    """语音克隆 — 上传参考音频创建克隆音色"""
+    import os, base64, tempfile
+    from pathlib import Path
+    from ..tools.tts_factory import SiliconFlowTTS
+
+    api_key = os.getenv("SILICONFLOW_API_KEY", "")
+    if not api_key:
+        raise HTTPException(status_code=400, detail="未配置 SILICONFLOW_API_KEY，语音克隆不可用")
+
+    # 参考文本必填：缺少它克隆出的音色在合成时会报错(50507)或回吐参考音频，
+    # 表现为「试听内容与输入完全无关、且时长异常」。从源头拦截残缺克隆。
+    if not request.text or not request.text.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="请先填写『参考音频对应文本』（即参考音频中实际念出的文字）再克隆。"
+                   "缺少参考文本会导致克隆音色无法正常合成，试听会出现内容/时长都不对的情况。",
+        )
+
+    # 将 base64 写入临时文件
+    try:
+        audio_bytes = base64.b64decode(request.audio_base64)
+    except Exception:
+        raise HTTPException(status_code=400, detail="无效的音频 base64 编码")
+
+    suffix = Path(request.audio_name).suffix or ".mp3"
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as f:
+        f.write(audio_bytes)
+        tmp_path = f.name
+
+    try:
+        engine = SiliconFlowTTS(
+            output_dir=Path("/tmp"),
+            api_key=api_key,
+            clone_audio_path=tmp_path,
+            clone_text=request.text,
+        )
+        voice_uri = engine.clone_voice()
+        return {"voice_uri": voice_uri, "message": "克隆成功"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"语音克隆失败: {str(e)}")
+    finally:
+        try:
+            Path(tmp_path).unlink()
+        except Exception:
+            pass
+
+
+@app.post("/api/voice/test")
+async def voice_test(request: VoiceTestRequest):
+    """试听合成 — 用指定音色合成文本并返回音频"""
+    import os, tempfile
+    from pathlib import Path
+    from fastapi.responses import Response
+    from ..tools.tts_factory import create_tts_engine
+
+    api_key = os.getenv("SILICONFLOW_API_KEY", "")
+
+    # 参数校验：拒绝无效/占位音色，给出明确提示而非底层报错
+    if not request.voice or request.voice == "__clone__":
+        raise HTTPException(
+            status_code=400,
+            detail="请选择有效音色：先上传参考音频完成克隆，或直接选择 CosyVoice2 预置音色",
+        )
+    if not request.text or not request.text.strip():
+        raise HTTPException(status_code=400, detail="请输入试听文本")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        engine = create_tts_engine(
+            output_dir=Path(tmpdir),
+            siliconflow_api_key=api_key,
+            voice=request.voice,
+        )
+        try:
+            mp3_path = engine.synthesize(request.text, "test_preview")
+            with open(mp3_path, "rb") as f:
+                audio_data = f.read()
+            return Response(content=audio_data, media_type="audio/mpeg")
+        except Exception as e:
+            # 前端已统一加「试听合成失败: 」前缀，这里只透传内部错误明细
+            raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/course/{session_id}/audio/{lesson_id}")
+async def download_audio(session_id: str, lesson_id: str):
+    """下载单课时音频文件"""
+    from fastapi.responses import FileResponse
+    from pathlib import Path
+
+    session = _session_store.get(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="会话不存在或已过期")
+
+    audio_files = session.get("state", {}).get("audio_files", {})
+    mp3_path = audio_files.get(lesson_id)
+    if not mp3_path or not Path(mp3_path).exists():
+        raise HTTPException(status_code=404, detail=f"音频文件 {lesson_id} 不存在")
+
+    return FileResponse(mp3_path, media_type="audio/mpeg", filename=f"{lesson_id}.mp3")
+
+
+@app.get("/api/course/{session_id}/video/{lesson_id}")
+async def download_video(session_id: str, lesson_id: str):
+    """下载单课时数字人视频文件"""
+    from fastapi.responses import FileResponse
+    from pathlib import Path
+
+    session = _session_store.get(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="会话不存在或已过期")
+
+    video_files = session.get("state", {}).get("digital_human_videos", {})
+    mp4_path = video_files.get(lesson_id)
+    if not mp4_path or not Path(mp4_path).exists():
+        raise HTTPException(status_code=404, detail=f"数字人视频 {lesson_id} 不存在")
+
+    return FileResponse(mp4_path, media_type="video/mp4", filename=f"{lesson_id}.mp4")
+
+
+# ============================================================
+# M6: 课程内容查询
+# ============================================================
+
+@app.get("/api/course/{session_id}/content/{content_type}")
+async def get_course_content(session_id: str, content_type: str):
+    """获取课程特定内容类型（供前端预览）
+
+    content_type: outline|ip_report|scripts|slides|cases|marketing|pricing|review|audio|video
+    """
+    session = _session_store.get(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="会话不存在或已过期")
+
+    state = session["state"]
+    content_map = {
+        "outline": state.get("course_outline"),
+        "ip_report": state.get("ip_positioning"),
+        "scripts": state.get("scripts"),
+        "slides": state.get("slides"),
+        "cases": state.get("cases"),
+        "marketing": state.get("marketing_copy"),
+        "pricing": state.get("pricing_plan"),
+        "review": state.get("review_detail"),
+        "audio": state.get("audio_files"),
+        "video": state.get("digital_human_videos"),
+    }
+
+    if content_type not in content_map:
+        raise HTTPException(status_code=400, detail=f"无效的内容类型: {content_type}")
+
+    return {
+        "session_id": session_id,
+        "content_type": content_type,
+        "data": content_map[content_type],
+    }
+
+
+# ============================================================
+# M7: 系统统计
+# ============================================================
+
+@app.get("/api/stats")
+async def system_stats():
+    """系统统计信息"""
+    total_sessions = _session_store.total_sessions()
+    active_sessions = _session_store.active_sessions()
+    completed_sessions = total_sessions - active_sessions
+
+    return {
+        "total_sessions": total_sessions,
+        "active_sessions": active_sessions,
+        "completed_sessions": completed_sessions,
+        "version": "0.3.0",
+    }
+
+
+# ============================================================
+# 静态前端 + 根路径入口
+# ============================================================
+
+import os as _os
+_STATIC_DIR = _os.path.join(_os.path.dirname(__file__), "..", "static")
+_STATIC_DIR = _os.path.abspath(_STATIC_DIR)
+
+# 挂载静态文件目录（/static/*）
+app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
+
+# 根路径直接返回前端页面
+@app.get("/")
+async def root():
+    return FileResponse(_os.path.join(_STATIC_DIR, "index.html"))
+
+
+# ============================================================
+# 健康检查
+# ============================================================
+
+@app.get("/health")
+async def health():
+    return {"status": "ok", "version": "0.3.0", "sessions": _session_store.total_sessions()}
+
+# === 数字人 P0 MVP (WaveSpeed Hunyuan Avatar) ===
+from .digital_human_p0 import router as _dh_p0_router
+app.include_router(_dh_p0_router)

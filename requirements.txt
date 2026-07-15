@@ -1,0 +1,14 @@
+# 文经客 AIP OPC 核心架构 - 依赖
+langgraph>=1.0
+langgraph-checkpoint-sqlite>=2.0
+crewai>=1.14
+langchain-core>=0.3
+fastapi>=0.115
+uvicorn[standard]>=0.32
+pydantic>=2.10
+sqlite-utils>=3.38
+httpx>=0.28
+requests>=2.32
+python-dotenv>=1.0
+edge-tts>=6.1.0
+wavespeed>=1.0

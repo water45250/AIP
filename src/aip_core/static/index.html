@@ -1,0 +1,1106 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>文经客 AIP · 课程生成</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  /* ===== AIP 创作中心设计系统 ===== */
+  :root {
+    --brand-500: #8d54ff;
+    --brand-400: #a685ff;
+    --brand-300: #c4b5ff;
+    --brand-50:  #f5f0ff;
+    --nav-bg:   #1a1a2e;
+    --nav-text: #e0e0f0;
+    --bg:       #0f0f23;
+    --surface:  #1a1a30;
+    --surface2: #242440;
+    --card:     #1e1e38;
+    --card-hover: #282850;
+    --border:   #2a2a4a;
+    --border-light: #3a3a5a;
+    --text:     #e8e8f0;
+    --text-secondary: #9898b8;
+    --text-muted: #6868a0;
+    --success:  #22c55e;
+    --warning:  #f59e0b;
+    --danger:   #ef4444;
+    --radius:   16px;
+    --radius-sm: 10px;
+    --radius-xs: 8px;
+    --shadow:   0 4px 24px rgba(0,0,0,.3);
+    --shadow-sm: 0 2px 8px rgba(0,0,0,.2);
+    --font:     'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    font-family: var(--font);
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    min-height: 100vh;
+  }
+
+  /* ===== 顶部导航栏 ===== */
+  .navbar {
+    background: var(--nav-bg);
+    border-bottom: 1px solid var(--border);
+    padding: 0 24px;
+    height: 56px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    backdrop-filter: blur(12px);
+  }
+  .navbar-logo {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-weight: 700;
+    font-size: 18px;
+    color: var(--text);
+    text-decoration: none;
+  }
+  .navbar-logo .icon {
+    width: 32px; height: 32px;
+    background: linear-gradient(135deg, var(--brand-500), var(--brand-400));
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+  }
+  .navbar-links {
+    display: flex;
+    gap: 4px;
+    margin-left: 24px;
+  }
+  .navbar-links a {
+    padding: 8px 16px;
+    border-radius: var(--radius-xs);
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    text-decoration: none;
+    transition: all .2s;
+  }
+  .navbar-links a:hover { color: var(--text); background: var(--surface2); }
+  .navbar-links a.active {
+    color: var(--brand-400);
+    background: linear-gradient(135deg, rgba(141,84,255,.12), rgba(166,133,255,.08));
+  }
+  .navbar-status {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--text-secondary);
+  }
+  .status-dot {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: var(--danger);
+  }
+  .status-dot.online { background: var(--success); box-shadow: 0 0 6px rgba(34,197,94,.4); }
+  .status-dot.checking { background: var(--warning); animation: pulse 1s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+  .api-input {
+    background: var(--surface);
+    border: 1px solid var(--border-light);
+    border-radius: 6px;
+    padding: 5px 10px;
+    font-size: 12px;
+    color: var(--text);
+    font-family: var(--font);
+    width: 160px;
+    outline: none;
+    transition: border-color .2s;
+  }
+  .api-input:focus { border-color: var(--brand-500); }
+
+  /* ===== 主布局 ===== */
+  .layout {
+    display: grid;
+    grid-template-columns: 440px 1fr;
+    height: calc(100vh - 56px);
+    max-width: 1680px;
+    margin: 0 auto;
+  }
+
+  /* ===== 左侧面板 ===== */
+  .sidebar {
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .sidebar-header {
+    padding: 20px 24px;
+    border-bottom: 1px solid var(--border);
+  }
+  .sidebar-header h2 {
+    font-size: 18px;
+    font-weight: 700;
+    margin-bottom: 4px;
+  }
+  .sidebar-header .subtitle {
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+  .chat-area {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .chat-msg {
+    max-width: 88%;
+    padding: 12px 16px;
+    border-radius: var(--radius-sm);
+    font-size: 14px;
+    line-height: 1.55;
+    animation: fadeIn .3s ease;
+    word-break: break-word;
+  }
+  @keyframes fadeIn { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:translateY(0)} }
+  .chat-msg.user {
+    align-self: flex-end;
+    background: linear-gradient(135deg, var(--brand-500), var(--brand-400));
+    color: #fff;
+  }
+  .chat-msg.assistant {
+    align-self: flex-start;
+    background: var(--card);
+    color: var(--text);
+    border: 1px solid var(--border-light);
+  }
+  .chat-msg.system {
+    align-self: center;
+    background: rgba(245,158,11,.1);
+    border: 1px solid rgba(245,158,11,.2);
+    color: var(--warning);
+    font-size: 12px;
+    padding: 8px 14px;
+    border-radius: 20px;
+  }
+  .chat-input-area {
+    padding: 16px 24px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    gap: 10px;
+  }
+  .chat-input-area input {
+    flex: 1;
+    padding: 12px 16px;
+    background: var(--surface2);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-xs);
+    font-size: 14px;
+    color: var(--text);
+    font-family: var(--font);
+    outline: none;
+    transition: border-color .2s, box-shadow .2s;
+  }
+  .chat-input-area input:focus {
+    border-color: var(--brand-500);
+    box-shadow: 0 0 0 3px rgba(141,84,255,.15);
+  }
+  .chat-input-area input::placeholder { color: var(--text-muted); }
+  .chat-input-area button {
+    padding: 12px 22px;
+    background: linear-gradient(135deg, var(--brand-500), var(--brand-400));
+    color: #fff;
+    border: none;
+    border-radius: var(--radius-xs);
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all .2s;
+    font-family: var(--font);
+    white-space: nowrap;
+  }
+  .chat-input-area button:hover { opacity: .9; transform: translateY(-1px); box-shadow: 0 4px 16px rgba(141,84,255,.3); }
+  .chat-input-area button:disabled { opacity: .5; cursor: not-allowed; transform: none; box-shadow: none; }
+
+  /* ===== 右侧面板 ===== */
+  .main {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: var(--bg);
+  }
+  .main-header {
+    padding: 16px 28px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 20px;
+  }
+  .main-header h2 { font-size: 16px; font-weight: 600; white-space: nowrap; }
+  .progress-bar-container { flex: 1; }
+  .progress-steps {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+  }
+  .progress-step {
+    width: 32px; height: 32px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 700;
+    border: 2px solid var(--border-light);
+    background: var(--surface2);
+    color: var(--text-muted);
+    transition: all .3s;
+    position: relative;
+  }
+  .progress-step.completed {
+    background: var(--success);
+    border-color: var(--success);
+    color: #fff;
+  }
+  .progress-step.running {
+    border-color: var(--brand-500);
+    color: var(--brand-400);
+    animation: pulse 1.5s infinite;
+    box-shadow: 0 0 12px rgba(141,84,255,.3);
+  }
+  .progress-line {
+    width: 20px; height: 2px;
+    background: var(--border-light);
+    transition: background .3s;
+  }
+  .progress-line.done { background: var(--success); }
+  .session-badge {
+    font-size: 12px;
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+
+  .main-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 24px 28px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  /* ===== 渐变卡片 ===== */
+  .gradient-card {
+    background: var(--card);
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow-sm);
+    animation: slideIn .35s ease;
+  }
+  @keyframes slideIn { from{opacity:0;transform:translateX(16px)} to{opacity:1;transform:translateX(0)} }
+  .gradient-card-header {
+    padding: 16px 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1px solid var(--border);
+  }
+  .gradient-card-header h3 { font-size: 15px; font-weight: 600; }
+
+  /* ===== HITL 卡片 ===== */
+  .hitl-card {
+    background: linear-gradient(135deg, var(--card), var(--surface2));
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--brand-500);
+    box-shadow: var(--shadow-sm);
+    animation: slideIn .35s ease;
+  }
+  .hitl-header {
+    padding: 16px 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1px solid var(--border);
+  }
+  .hitl-header h3 { font-size: 15px; font-weight: 600; }
+  .hitl-badge {
+    padding: 4px 12px;
+    background: linear-gradient(135deg, rgba(141,84,255,.2), rgba(166,133,255,.12));
+    color: var(--brand-400);
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 600;
+    border: 1px solid rgba(141,84,255,.2);
+  }
+  .hitl-body {
+    padding: 16px 20px;
+    font-size: 14px;
+  }
+  .hitl-body p { margin-bottom: 6px; }
+  .hitl-hint {
+    color: var(--text-muted);
+    font-size: 12px;
+    margin-top: 8px;
+  }
+  .hitl-actions {
+    padding: 12px 20px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .btn {
+    padding: 9px 18px;
+    border-radius: var(--radius-xs);
+    font-size: 13px;
+    font-weight: 600;
+    border: none;
+    cursor: pointer;
+    transition: all .2s;
+    font-family: var(--font);
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .btn:hover { transform: translateY(-1px); }
+  .btn-confirm {
+    background: linear-gradient(135deg, var(--success), #16a34a);
+    color: #fff;
+    box-shadow: 0 2px 8px rgba(34,197,94,.2);
+  }
+  .btn-confirm:hover { box-shadow: 0 4px 16px rgba(34,197,94,.3); }
+  .btn-skip {
+    background: var(--surface2);
+    color: var(--text-secondary);
+    border: 1px solid var(--border-light);
+  }
+  .btn-skip:hover { background: var(--card-hover); color: var(--text); }
+  .btn-regenerate {
+    background: rgba(245,158,11,.1);
+    color: var(--warning);
+    border: 1px solid rgba(245,158,11,.2);
+  }
+  .btn-regenerate:hover { background: rgba(245,158,11,.18); }
+  .btn-skip-all {
+    background: rgba(239,68,68,.1);
+    color: var(--danger);
+    border: 1px solid rgba(239,68,68,.2);
+  }
+  .btn-skip-all:hover { background: rgba(239,68,68,.18); }
+  .btn-primary {
+    background: linear-gradient(135deg, var(--brand-500), var(--brand-400));
+    color: #fff;
+    box-shadow: 0 2px 8px rgba(141,84,255,.25);
+  }
+  .btn-primary:hover { box-shadow: 0 4px 18px rgba(141,84,255,.4); }
+
+  /* ===== 内容面板 ===== */
+  .content-panel {
+    background: var(--card);
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow-sm);
+  }
+  .content-panel-header {
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .content-panel-header h3 { font-size: 15px; font-weight: 600; }
+  .content-tabs {
+    display: flex;
+    gap: 4px;
+    padding: 10px 20px;
+    border-bottom: 1px solid var(--border);
+    overflow-x: auto;
+  }
+  .content-tab {
+    padding: 7px 16px;
+    border-radius: 20px;
+    font-size: 13px;
+    font-weight: 500;
+    border: 1px solid var(--border-light);
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all .2s;
+    font-family: var(--font);
+  }
+  .content-tab.active {
+    background: linear-gradient(135deg, var(--brand-500), var(--brand-400));
+    color: #fff;
+    border-color: transparent;
+  }
+  .content-tab:hover:not(.active) { background: var(--surface2); color: var(--text); }
+  .content-body {
+    padding: 20px;
+    max-height: 420px;
+    overflow-y: auto;
+    font-size: 14px;
+    line-height: 1.7;
+  }
+  .content-body pre {
+    background: var(--surface2);
+    padding: 16px;
+    border-radius: var(--radius-sm);
+    overflow-x: auto;
+    font-size: 13px;
+    white-space: pre-wrap;
+    color: var(--text);
+    border: 1px solid var(--border-light);
+  }
+
+  /* ===== 画像卡片 ===== */
+  .profile-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+  .profile-item {
+    background: var(--surface2);
+    padding: 12px 16px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-light);
+  }
+  .profile-item .label {
+    font-size: 10px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: .6px;
+    font-weight: 600;
+  }
+  .profile-item .value { font-size: 14px; font-weight: 500; margin-top: 3px; color: var(--text); }
+
+  /* ===== 大纲 ===== */
+  .outline-module {
+    background: var(--surface2);
+    border-radius: var(--radius-sm);
+    padding: 14px 16px;
+    margin-bottom: 10px;
+    border: 1px solid var(--border-light);
+    transition: border-color .2s;
+  }
+  .outline-module:hover { border-color: var(--brand-500); }
+  .outline-module .mod-title { font-weight: 700; font-size: 15px; margin-bottom: 4px; }
+  .outline-module .mod-meta { font-size: 12px; color: var(--text-muted); margin-bottom: 8px; }
+  .outline-lesson {
+    padding: 8px 12px;
+    margin: 5px 0;
+    background: var(--card);
+    border-radius: 6px;
+    font-size: 13px;
+    border-left: 3px solid var(--brand-500);
+  }
+
+  /* ===== 审核 ===== */
+  .review-score-big { text-align: center; padding: 24px; }
+  .score-circle {
+    width: 100px; height: 100px;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 32px;
+    font-weight: 800;
+    border: 4px solid;
+    background: var(--surface2);
+  }
+  .score-circle.good { border-color: var(--success); color: var(--success); }
+  .score-circle.ok { border-color: var(--warning); color: var(--warning); }
+  .score-circle.bad { border-color: var(--danger); color: var(--danger); }
+  .review-dims { display: grid; gap: 8px; margin-top: 16px; }
+  .review-dim {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    background: var(--surface2);
+    border-radius: var(--radius-xs);
+    border: 1px solid var(--border-light);
+  }
+  .review-dim .dim-name { font-size: 13px; font-weight: 500; }
+  .review-dim .dim-score { font-size: 15px; font-weight: 700; color: var(--brand-400); }
+
+  /* ===== 空状态 & 完成 ===== */
+  .empty-state, .complete-panel {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    text-align: center;
+    padding: 40px;
+  }
+  .empty-state .icon, .complete-panel .icon { font-size: 56px; margin-bottom: 16px; }
+  .empty-state h3, .complete-panel h2 { font-size: 20px; margin-bottom: 8px; }
+  .empty-state p, .complete-panel p { color: var(--text-secondary); font-size: 14px; max-width: 400px; }
+  .complete-panel h2 { background: linear-gradient(135deg, var(--brand-500), var(--brand-400)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+
+  /* ===== 引用块 ===== */
+  blockquote {
+    font-size: 15px;
+    font-style: italic;
+    padding: 14px 18px;
+    background: linear-gradient(135deg, rgba(141,84,255,.08), rgba(166,133,255,.04));
+    border-radius: var(--radius-sm);
+    margin-bottom: 16px;
+    border-left: 3px solid var(--brand-500);
+    color: var(--text);
+  }
+
+  /* ===== 标签 ===== */
+  .tag {
+    display: inline-block;
+    margin: 4px;
+    padding: 5px 14px;
+    background: linear-gradient(135deg, rgba(141,84,255,.15), rgba(166,133,255,.08));
+    border-radius: 20px;
+    font-size: 13px;
+    color: var(--brand-400);
+    border: 1px solid rgba(141,84,255,.15);
+  }
+
+  /* ===== 响应式 ===== */
+  @media (max-width: 900px) {
+    .layout { grid-template-columns: 1fr; }
+    .sidebar { max-height: 50vh; }
+    .navbar-links { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ===== 导航栏 ===== -->
+<nav class="navbar">
+  <a class="navbar-logo" href="#">
+    <div class="icon">📚</div>
+    文经客 AIP
+  </a>
+  <div class="navbar-links">
+    <a href="#" class="active">課程生成</a>
+    <a href="#">視頻生成</a>
+    <a href="#">智能剪輯</a>
+    <a href="#">成品預覽</a>
+  </div>
+  <div class="navbar-status">
+    <span class="status-dot checking" id="statusDot"></span>
+    <span id="statusText">檢測 API...</span>
+    <input type="text" class="api-input" id="apiUrlInput" placeholder="http://localhost:8080" title="修改后按回车生效" onkeydown="if(event.key==='Enter')setApiBase(this.value)" />
+  </div>
+</nav>
+
+<!-- ===== 主布局 ===== -->
+<div class="layout">
+  <!-- 左侧：对话区 -->
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <h2>🤖 課程生成助手</h2>
+      <div class="subtitle">分層多 Agent 協作系統 · 聯調測試</div>
+    </div>
+    <div class="chat-area" id="chatArea">
+      <div class="chat-msg assistant">
+        👋 你好！我是課程生成助手。<br><br>
+        請描述你想創建的課程：<br><br>
+        <strong>例如：</strong><br>
+        「我是有 5 年 Python 開發經驗的程序員，想做一門面向零基礎小白的 Python 入門課，用錄播視頻形式，希望內容實用有趣」
+      </div>
+    </div>
+    <div class="chat-input-area">
+      <input type="text" id="msgInput" placeholder="輸入課程需求..." onkeydown="if(event.key==='Enter')sendMessage()" />
+      <button id="sendBtn" onclick="sendMessage()">發送</button>
+    </div>
+  </aside>
+
+  <!-- 右侧：进度 + HITL + 内容 -->
+  <main class="main">
+    <div class="main-header">
+      <h2>課程生成進度</h2>
+      <div class="progress-bar-container">
+        <div class="progress-steps" id="progressSteps"></div>
+      </div>
+      <span class="session-badge" id="sessionBadge"></span>
+    </div>
+    <div class="main-content" id="mainContent">
+      <div class="empty-state">
+        <div class="icon">🚀</div>
+        <h3>開始創建課程</h3>
+        <p>在左側輸入課程需求，AI 將引導你完成從需求分析到課程交付的全流程。</p>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script>
+// ============================================================
+// 配置
+// ============================================================
+const API_BASE = localStorage.getItem('aip_api_base') || window.location.origin;
+document.getElementById('apiUrlInput').value = API_BASE;
+
+function setApiBase(url) {
+  const clean = url.trim().replace(/\/$/, '');
+  localStorage.setItem('aip_api_base', clean);
+  location.reload();
+}
+
+// ============================================================
+// 全局状态
+// ============================================================
+let sessionId = null;
+let pollTimer = null;
+
+const STAGE_LABELS = {
+  requirement_analysis: '需求解析',
+  ip_positioning: 'IP定位',
+  course_architecture: '課程架構',
+  content_production_parallel: '內容生產(並行)',
+  content_production_serial: '內容生產(串行)',
+  quality_review: '質量審核',
+  packaging: '打包交付'
+};
+
+const STAGE_ORDER = [
+  'requirement_analysis','ip_positioning','course_architecture',
+  'content_production_parallel','content_production_serial',
+  'quality_review','packaging'
+];
+
+// ============================================================
+// API
+// ============================================================
+async function api(path, options = {}) {
+  const url = API_BASE + path;
+  const res = await fetch(url, {
+    headers: { 'Content-Type': 'application/json', ...options.headers },
+    ...options,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+// ============================================================
+// 健康检查
+// ============================================================
+async function checkHealth() {
+  const dot = document.getElementById('statusDot');
+  const txt = document.getElementById('statusText');
+  dot.className = 'status-dot checking';
+  txt.textContent = '檢測 API...';
+  try {
+    const res = await fetch(API_BASE + '/health');
+    const data = await res.json();
+    dot.className = 'status-dot online';
+    txt.textContent = `API 在線 · v${data.version}`;
+  } catch {
+    dot.className = 'status-dot';
+    txt.textContent = 'API 離線 — 請啟動後端服務';
+  }
+}
+checkHealth();
+setInterval(checkHealth, 15000);
+
+// ============================================================
+// 聊天
+// ============================================================
+function addChat(role, text) {
+  const area = document.getElementById('chatArea');
+  const div = document.createElement('div');
+  div.className = `chat-msg ${role}`;
+  div.innerHTML = text.replace(/\n/g, '<br>');
+  area.appendChild(div);
+  area.scrollTop = area.scrollHeight;
+}
+
+function addSystemMsg(text) {
+  const area = document.getElementById('chatArea');
+  const div = document.createElement('div');
+  div.className = 'chat-msg system';
+  div.textContent = text;
+  area.appendChild(div);
+  area.scrollTop = area.scrollHeight;
+}
+
+async function sendMessage() {
+  const input = document.getElementById('msgInput');
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+  addChat('user', text);
+
+  const btn = document.getElementById('sendBtn');
+  btn.disabled = true;
+
+  try {
+    if (!sessionId) {
+      const res = await api('/api/course/create', {
+        method: 'POST',
+        body: JSON.stringify({ initial_message: text, user_id: 'frontend-tester' }),
+      });
+      sessionId = res.session_id;
+      document.getElementById('sessionBadge').textContent = `會話: ${sessionId}`;
+      addSystemMsg(`會話已創建: ${sessionId}`);
+
+      if (res.agent_message) addChat('assistant', res.agent_message);
+      if (res.hitl) renderHitl(res.hitl);
+      if (res.need_followup) addSystemMsg('請繼續補充課程需求資訊…');
+      if (res.profile) renderProfile(res.profile);
+      updateProgress(res.stage || 'requirement_analysis');
+      startPolling();
+    } else {
+      const res = await api(`/api/course/${sessionId}/message`, {
+        method: 'POST',
+        body: JSON.stringify({ message: text }),
+      });
+      if (res.agent_message) addChat('assistant', res.agent_message);
+      if (res.hitl) renderHitl(res.hitl);
+      if (res.need_followup) addSystemMsg('請繼續補充課程需求資訊…');
+      if (res.profile) renderProfile(res.profile);
+      updateProgress(res.stage || 'requirement_analysis');
+    }
+  } catch (e) {
+    addSystemMsg(`錯誤: ${e.message}`);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// ============================================================
+// HITL
+// ============================================================
+async function hitlAction(hitlId, action) {
+  try {
+    const res = await api(`/api/course/${sessionId}/hitl/action`, {
+      method: 'POST',
+      body: JSON.stringify({ hitl_id: hitlId, action }),
+    });
+
+    const labelMap = { confirm: '已確認', skip: '已跳過', regenerate: '重新生成中…', skip_all: '已一鍵跳過全部' };
+    addSystemMsg(`✅ ${hitlId} ${labelMap[action] || '已操作'}`);
+
+    if (res.current_stage) updateProgress(res.current_stage);
+    if (res.is_complete) {
+      addSystemMsg('🎉 課程生成完成！');
+      renderComplete();
+    }
+
+    const hitlCard = document.querySelector('.hitl-card');
+    if (hitlCard) hitlCard.remove();
+
+    if (!res.next_hitl && !res.is_complete) {
+      addSystemMsg('正在處理後續階段…');
+    }
+  } catch (e) {
+    addSystemMsg(`HITL 操作失敗: ${e.message}`);
+  }
+}
+
+// ============================================================
+// 进度轮询
+// ============================================================
+function startPolling() {
+  if (pollTimer) return;
+  pollTimer = setInterval(pollProgress, 2000);
+}
+
+function stopPolling() {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+}
+
+async function pollProgress() {
+  if (!sessionId) return;
+  try {
+    const res = await api(`/api/course/${sessionId}/progress`);
+    if (res.stages) updateProgressBar(res.stages);
+    if (res.current_hitl) renderHitl(res.current_hitl);
+    if (res.is_complete) { stopPolling(); renderComplete(); }
+  } catch (e) {
+    if (!window._apiOfflineHinted) {
+      window._apiOfflineHinted = true;
+      addSystemMsg('⚠️ 無法連接到後端 API。請確認後端服務已啟動。');
+    }
+  }
+}
+
+// ============================================================
+// 进度条
+// ============================================================
+function updateProgress(currentStage) {
+  const steps = document.getElementById('progressSteps');
+  steps.innerHTML = '';
+  const currentIdx = STAGE_ORDER.indexOf(currentStage);
+  STAGE_ORDER.forEach((stage, i) => {
+    const step = document.createElement('div');
+    step.className = 'progress-step';
+    if (i < currentIdx) step.classList.add('completed');
+    else if (i === currentIdx) step.classList.add('running');
+    step.textContent = i + 1;
+    step.title = STAGE_LABELS[stage] || stage;
+    steps.appendChild(step);
+    if (i < STAGE_ORDER.length - 1) {
+      const line = document.createElement('div');
+      line.className = 'progress-line';
+      if (i < currentIdx) line.classList.add('done');
+      steps.appendChild(line);
+    }
+  });
+}
+
+function updateProgressBar(stages) {
+  const steps = document.getElementById('progressSteps');
+  steps.innerHTML = '';
+  stages.forEach((s, i) => {
+    const step = document.createElement('div');
+    step.className = 'progress-step';
+    if (s.status === 'completed') step.classList.add('completed');
+    else if (s.status === 'running') step.classList.add('running');
+    step.textContent = i + 1;
+    step.title = s.label || s.name;
+    steps.appendChild(step);
+    if (i < stages.length - 1) {
+      const line = document.createElement('div');
+      line.className = 'progress-line';
+      if (s.status === 'completed') line.classList.add('done');
+      steps.appendChild(line);
+    }
+  });
+}
+
+// ============================================================
+// 渲染
+// ============================================================
+function renderProfile(profile) {
+  const main = document.getElementById('mainContent');
+  const old = main.querySelector('.profile-card');
+  if (old) old.remove();
+  if (!profile || Object.keys(profile).length === 0) return;
+
+  const labels = {
+    identity: '身份', expertise: '專長', experience: '經驗',
+    target_audience: '目標學員', course_topic: '課程主題',
+    delivery_format: '交付形式', style_preference: '風格偏好'
+  };
+
+  const html = `
+    <div class="content-panel profile-card">
+      <div class="content-panel-header"><h3>📋 用戶畫像</h3></div>
+      <div class="content-body">
+        <div class="profile-grid">
+          ${Object.entries(labels).map(([k, label]) => {
+            const v = profile[k];
+            return v ? `<div class="profile-item"><div class="label">${label}</div><div class="value">${v}</div></div>` : '';
+          }).join('')}
+        </div>
+      </div>
+    </div>`;
+  main.insertAdjacentHTML('afterbegin', html);
+}
+
+function renderHitl(hitl) {
+  const main = document.getElementById('mainContent');
+  const old = main.querySelector('.hitl-card');
+  if (old) old.remove();
+  const empty = main.querySelector('.empty-state');
+  if (empty) empty.remove();
+
+  const html = `
+    <div class="hitl-card">
+      <div class="hitl-header">
+        <h3>🔔 ${hitl.label}</h3>
+        <span class="hitl-badge">${hitl.hitl_id}</span>
+      </div>
+      <div class="hitl-body">
+        <p>系統已完成 <strong>${hitl.label}</strong>，請確認結果或選擇操作。</p>
+        <p class="hitl-hint">💡 點擊「確認」繼續下一步 · 「跳過」不參與此環節 · 「重新生成」回到該步驟重來</p>
+      </div>
+      <div class="hitl-actions">
+        <button class="btn btn-confirm" onclick="hitlAction('${hitl.hitl_id}','confirm')">✅ 確認</button>
+        <button class="btn btn-skip" onclick="hitlAction('${hitl.hitl_id}','skip')">⏭ 跳過</button>
+        <button class="btn btn-regenerate" onclick="hitlAction('${hitl.hitl_id}','regenerate')">🔄 重新生成</button>
+        <button class="btn btn-skip-all" onclick="hitlAction('${hitl.hitl_id}','skip_all')">⏩ 一鍵跳過全部</button>
+      </div>
+    </div>`;
+
+  main.insertAdjacentHTML('afterbegin', html);
+
+  const contentMap = {
+    'HITL-1': 'profile', 'HITL-2': 'ip_report', 'HITL-3': 'outline',
+    'HITL-4': 'marketing', 'HITL-5': 'review',
+  };
+  const contentType = contentMap[hitl.hitl_id];
+  if (contentType) loadContent(contentType);
+}
+
+async function loadContent(type) {
+  if (!sessionId) return;
+  try {
+    const res = await api(`/api/course/${sessionId}/content/${type}`);
+    renderContent(type, res.data);
+  } catch {}
+}
+
+function renderContent(type, data) {
+  const main = document.getElementById('mainContent');
+  const old = main.querySelector('.content-panel:not(.profile-card)');
+  if (old) old.remove();
+  if (!data) return;
+
+  let bodyHtml = '';
+  let title = '';
+
+  switch (type) {
+    case 'ip_report':
+      title = '🎯 IP 定位報告';
+      bodyHtml = `
+        ${data.positioning_statement ? `<blockquote>"${data.positioning_statement}"</blockquote>` : ''}
+        ${data.differentiation_tags ? `<p>${(data.differentiation_tags||[]).map(t => `<span class="tag">${t}</span>`).join('')}</p>` : ''}
+        ${data.trust_flywheel ? `<h4 style="margin-top:12px;">信任飛輪</h4>${(data.trust_flywheel||[]).map((s,i) => `<div style="padding:6px 0;"><strong>${i+1}. ${s.step||''}</strong>: ${s.action||''} → ${s.goal||''}</div>`).join('')}` : ''}
+      `;
+      break;
+    case 'outline':
+      title = '📖 課程大綱';
+      if (data.course_title) {
+        bodyHtml += `<h3 style="margin-bottom:4px;">${data.course_title}</h3>`;
+        bodyHtml += `<p style="color:var(--text-muted);margin-bottom:16px;">${data.total_modules||0} 模組 · ${data.total_lessons||0} 課時 · ${data.total_duration_minutes||0} 分鐘</p>`;
+      }
+      if (data.modules) {
+        data.modules.forEach(m => {
+          bodyHtml += `<div class="outline-module"><div class="mod-title">${m.id||''} ${m.title||''}</div>`;
+          bodyHtml += `<div class="mod-meta">${m.phase||''} · ${m.description||''}</div>`;
+          if (m.lessons) {
+            m.lessons.forEach(l => {
+              bodyHtml += `<div class="outline-lesson"><strong>${l.id||''}</strong> ${l.title||''} <span style="color:var(--text-muted)">(${l.duration_minutes||0}分鐘)</span>${l.learning_objective ? `<br><small style="color:var(--text-secondary)">目標: ${l.learning_objective}</small>` : ''}</div>`;
+            });
+          }
+          bodyHtml += `</div>`;
+        });
+      }
+      break;
+    case 'scripts':
+      title = '📝 講稿';
+      if (data && typeof data === 'object') {
+        bodyHtml = Object.entries(data).map(([k,v]) => `<details style="margin-bottom:8px;"><summary style="cursor:pointer;font-weight:600;color:var(--brand-400);">${k}</summary><pre>${typeof v==='string'?v:JSON.stringify(v,null,2)}</pre></details>`).join('');
+      }
+      break;
+    case 'slides':
+      title = '🖼 課件';
+      if (data && typeof data === 'object') {
+        bodyHtml = `<p>${Object.keys(data).length} 個課件已生成</p>`;
+        bodyHtml += Object.entries(data).map(([k,v]) => `<details style="margin-bottom:8px;"><summary style="cursor:pointer;font-weight:600;color:var(--brand-400);">${k}</summary><pre>${typeof v==='string'?v:JSON.stringify(v,null,2)}</pre></details>`).join('');
+      }
+      break;
+    case 'cases':
+      title = '💼 案例庫';
+      if (Array.isArray(data)) {
+        bodyHtml = data.map(c => `<div style="background:var(--surface2);padding:12px 16px;border-radius:var(--radius-sm);margin-bottom:8px;border:1px solid var(--border-light);"><strong>${c.title||''}</strong><br><small style="color:var(--text-secondary);">${c.background||''}</small></div>`).join('');
+      }
+      break;
+    case 'marketing':
+      title = '📢 營銷文案';
+      if (data && typeof data === 'object') {
+        bodyHtml = Object.entries(data).map(([k,v]) => `<details style="margin-bottom:8px;"><summary style="cursor:pointer;font-weight:600;color:var(--brand-400);">${k}</summary><pre>${typeof v==='string'?v:JSON.stringify(v,null,2)}</pre></details>`).join('');
+      }
+      break;
+    case 'pricing':
+      title = '💰 定價方案';
+      bodyHtml = data ? `<pre>${JSON.stringify(data, null, 2)}</pre>` : '<p>暫無數據</p>';
+      break;
+    case 'review':
+      title = '✅ 審核報告';
+      if (data) {
+        const score = data.total_score || 0;
+        const cls = score >= 85 ? 'good' : score >= 80 ? 'ok' : 'bad';
+        bodyHtml = `<div class="review-score-big"><div class="score-circle ${cls}">${score}</div><p style="margin-top:12px;color:var(--text-secondary);">${score >= 85 ? '優秀，自動跳過確認' : score >= 80 ? '良好' : '需修正'}</p></div>`;
+        if (data.dimensions) {
+          bodyHtml += `<div class="review-dims">${Object.entries(data.dimensions).map(([k,v]) => `<div class="review-dim"><span class="dim-name">${k}</span><span class="dim-score">${v.score}/${v.max}</span></div>`).join('')}</div>`;
+        }
+      }
+      break;
+  }
+
+  if (bodyHtml) {
+    const panel = document.createElement('div');
+    panel.className = 'content-panel';
+    panel.innerHTML = `
+      <div class="content-panel-header"><h3>${title}</h3></div>
+      <div class="content-tabs">
+        ${['outline','ip_report','scripts','slides','cases','marketing','pricing','review'].map(t =>
+          `<button class="content-tab ${t===type?'active':''}" onclick="loadContent('${t}')">${{outline:'大綱',ip_report:'IP報告',scripts:'講稿',slides:'課件',cases:'案例',marketing:'營銷',pricing:'定價',review:'審核'}[t]}</button>`
+        ).join('')}
+      </div>
+      <div class="content-body">${bodyHtml}</div>`;
+    main.appendChild(panel);
+  }
+}
+
+function renderComplete() {
+  const main = document.getElementById('mainContent');
+  main.innerHTML = `
+    <div class="complete-panel">
+      <div class="icon">🎉</div>
+      <h2>課程生成完成！</h2>
+      <p>你的課程已打包就緒，可以下載了。</p>
+      <div style="display:flex;gap:12px;margin-top:8px;">
+        <button class="btn btn-primary" onclick="downloadPackage()">📦 下載課程包 (ZIP)</button>
+        <button class="btn btn-skip" onclick="resetSession()">🔄 創建新課程</button>
+      </div>
+    </div>`;
+}
+
+async function downloadPackage() {
+  if (!sessionId) return;
+  try {
+    window.open(`${API_BASE}/api/course/${sessionId}/download`, '_blank');
+    addSystemMsg('📦 開始下載課程包…');
+  } catch (e) {
+    addSystemMsg(`下載失敗: ${e.message}`);
+  }
+}
+
+function resetSession() {
+  stopPolling();
+  window._apiOfflineHinted = false;
+  sessionId = null;
+  document.getElementById('sessionBadge').textContent = '';
+  document.getElementById('chatArea').innerHTML = `
+    <div class="chat-msg assistant">
+      👋 你好！我是課程生成助手。<br><br>
+      請描述你想創建的課程…
+    </div>`;
+  document.getElementById('mainContent').innerHTML = `
+    <div class="empty-state">
+      <div class="icon">🚀</div>
+      <h3>開始創建課程</h3>
+      <p>在左側輸入課程需求，AI 將引導你完成從需求分析到課程交付的全流程。</p>
+    </div>`;
+  document.getElementById('progressSteps').innerHTML = '';
+}
+
+// ============================================================
+// 初始化进度条
+// ============================================================
+updateProgressBar(STAGE_ORDER.map(name => ({
+  name, label: STAGE_LABELS[name] || name, status: 'pending'
+})));
+</script>
+</body>
+</html>
