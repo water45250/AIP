@@ -77,17 +77,37 @@ def _calculate_completeness(profile: UserProfile) -> int:
 
 
 def _generate_followup(missing_fields: list[str], round_num: int) -> str:
-    """生成追问消息"""
+    """生成追问消息
+
+    每轮挑选不同的缺失字段追问，避免重复同一问题；
+    并把后续还会问的字段先列出来，减少来回轮次。
+    """
     if not missing_fields:
         return "我已经了解了你的需求，正在为你分析课程定位..."
 
-    field = missing_fields[0]
+    # 轮换缺失字段，保证每轮问的是不同问题
+    idx = round_num % len(missing_fields)
+    field = missing_fields[idx]
     question = FOLLOWUP_QUESTIONS.get(field, f"能再聊聊你的{field}吗？")
+
+    # 把本轮之外、后续还会问的字段先提示出来
+    _field_names = {
+        "course_topic": "课程方向",
+        "expertise": "核心专长",
+        "identity": "你的身份",
+        "target_audience": "目标学员",
+        "experience": "从业经验",
+        "delivery_format": "交付形式",
+        "style_preference": "课程风格",
+    }
+    others = [f for f in missing_fields if f != field][:2]
+    if others:
+        names = "、".join(_field_names.get(f, f) for f in others)
+        question = question.rstrip() + f"（后续还想了解：{names}）"
 
     if round_num == 0:
         return question
-    else:
-        return f"好的，还有一个问题：{question}"
+    return f"好的，还有一个问题：{question}"
 
 
 def _parse_user_input(user_message: str, existing_profile: Optional[UserProfile] = None) -> UserProfile:
@@ -141,19 +161,27 @@ def _parse_user_input(user_message: str, existing_profile: Optional[UserProfile]
                 profile["style_preference"] = style
                 break
 
-    # 4. 提取课程主题 - 用常见模式匹配
+    # 4. 提取课程主题 - 宽松匹配自然表达（"ESG的系列课程" / "X培训" 等）
+    #    关键：用「认识/了解/做...」等动词就近锚定课程词，避免 (.+?) 从句首吞到句尾。
     if "course_topic" not in profile or not profile["course_topic"]:
         topic_patterns = [
             r'关于(.+?)的课程',
+            r'(?:认识|了解|做|讲|讲讲|想做|打算|希望|需要)(.+?)的(?:系列)?(?:课程|课|培训|训练营)',
             r'做[一个门]*[关于]*(.+?)[的之]*(课程|课|培训|训练营)',
             r'(.+?)运营',
             r'(.+?)教程',
         ]
+        _lead_verbs = ("认识", "了解", "想做", "开始", "打算", "希望", "需要", "做", "讲", "讲讲")
         for pattern in topic_patterns:
             match = re.search(pattern, text)
             if match:
-                profile["course_topic"] = match.group(1).strip()
-                break
+                topic = match.group(1).strip()
+                for _v in _lead_verbs:
+                    if topic.startswith(_v):
+                        topic = topic[len(_v):].strip()
+                if topic:
+                    profile["course_topic"] = topic
+                    break
 
     # 5. 提取经验
     if "experience" not in profile or not profile["experience"]:
@@ -167,9 +195,12 @@ def _parse_user_input(user_message: str, existing_profile: Optional[UserProfile]
                 profile["experience"] = f"{match.group(1)}年"
                 break
 
-    # 6. 提取受众
+    # 6. 提取受众 - 支持「针对/面向/服务 + 地区/人群」等自然表达
+    #    关键：把「地区 + 人口词（如务工人员）」整体保留，而非只抓到地区。
     if "target_audience" not in profile or not profile["target_audience"]:
         audience_patterns = [
+            r'(?:针对|面向|服务[于]?)(.+?(?:务工人员|学员|用户|人群|客户|读者|受众))',
+            r'(.+?(?:务工人员|学员|用户|人群|客户|读者|受众))',
             r'(新手|零基础|小白|入门)',
             r'(进阶|提升|有一定基础)',
             r'(变现|赚钱|商业|盈利)',
@@ -177,7 +208,8 @@ def _parse_user_input(user_message: str, existing_profile: Optional[UserProfile]
         for pattern in audience_patterns:
             match = re.search(pattern, text)
             if match:
-                profile["target_audience"] = match.group(0)
+                _g = match.group(1).strip() if (match.groups() and match.group(1)) else match.group(0).strip()
+                profile["target_audience"] = _g
                 break
 
     # 7. 提取专长
