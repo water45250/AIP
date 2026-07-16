@@ -91,6 +91,8 @@ async def generate_task(
 ):
     if api_key:
         os.environ["WAVESPEED_API_KEY"] = api_key
+    # mock 模式（無 WAVESPEED_API_KEY）：用佔位 uploader，避免同步上傳崩潰
+    uploader = (lambda p: f"/mock/{Path(p).name}") if _is_mock() else default_uploader
     inp = build_input(
         image_file=_save_upload(image),
         image_url=image_url,
@@ -99,6 +101,7 @@ async def generate_task(
         resolution=resolution,
         prompt=prompt,
         seed=seed,
+        uploader=uploader,
     )
     task_id = uuid.uuid4().hex
     _tasks[task_id] = {"status": "running", "input": inp}
