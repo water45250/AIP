@@ -221,6 +221,31 @@ class SessionStore:
 _session_store = SessionStore()
 
 
+# ============================================================
+# 并发控制：真正"正在生成中"的会话计数（按用户）
+# 与 DB 中的 completed 状态解耦，避免被中断/放弃/旧 schema 的
+# 僵尸会话永久占用并发名额。每次同步生成请求结束必定释放名额。
+# ============================================================
+_running_lock = threading.Lock()
+_running_by_user: dict = {}
+
+
+def _try_acquire_slot(user_id: str) -> bool:
+    """尝试占用一个并发生成名额；成功返回 True，已达上限返回 False。"""
+    with _running_lock:
+        current = _running_by_user.get(user_id, 0)
+        if current >= MAX_CONCURRENT_SESSIONS:
+            return False
+        _running_by_user[user_id] = current + 1
+        return True
+
+
+def _release_slot(user_id: str) -> None:
+    """释放一个并发生成名额。"""
+    with _running_lock:
+        _running_by_user[user_id] = max(0, _running_by_user.get(user_id, 0) - 1)
+
+
 def get_graph():
     """懒加载 Graph"""
     global _graph, _checkpointer
@@ -286,9 +311,9 @@ async def create_course(request: CreateCourseRequest):
             detail={"error": "content_safety_violation", "message": safety_result.message}
         )
 
-    # 检查并发限制
-    active_count = _session_store.count_active_by_user(user_id)
-    if active_count >= MAX_CONCURRENT_SESSIONS:
+    # 检查并发限制：统计"正在生成中"的请求数（而非未完成的会话数），
+    # 避免被僵尸/中断会话永久占用名额。
+    if not _try_acquire_slot(user_id):
         raise HTTPException(
             status_code=429,
             detail=f"同时进行的课程生成已达上限 ({MAX_CONCURRENT_SESSIONS})，请等待现有任务完成"
@@ -299,7 +324,10 @@ async def create_course(request: CreateCourseRequest):
 
     # 运行需求解析
     from ..agents.requirement_agent import run_requirement_analysis
-    state = run_requirement_analysis(state)
+    try:
+        state = run_requirement_analysis(state)
+    finally:
+        _release_slot(user_id)
 
     # 持久化到 SQLite
     _session_store.save(session_id, state, user_id=user_id, completed=False)
@@ -432,15 +460,31 @@ async def hitl_action(session_id: str, request: HitlActionRequest):
     if request.action == "regenerate":
         # 回到当前 HITL 对应的节点重新生成
         node_name = HITL_DEFINITIONS[hitl_id]["node"]
-        _run_node(state, node_name)
+        if not _try_acquire_slot(user_id):
+            raise HTTPException(
+                status_code=429,
+                detail=f"同时进行的课程生成已达上限 ({MAX_CONCURRENT_SESSIONS})，请等待现有任务完成"
+            )
+        try:
+            _run_node(state, node_name)
+        finally:
+            _release_slot(user_id)
     else:
         # 推进到下一个节点
-        _advance_to_next(state, hitl_order)
-
-    _session_store.save(session_id, state, user_id=user_id, completed=False)
+        if not _try_acquire_slot(user_id):
+            raise HTTPException(
+                status_code=429,
+                detail=f"同时进行的课程生成已达上限 ({MAX_CONCURRENT_SESSIONS})，请等待现有任务完成"
+            )
+        try:
+            _advance_to_next(state, hitl_order)
+        finally:
+            _release_slot(user_id)
 
     # 检查是否全部完成
     is_complete = state.get("current_node") == "packaging"
+
+    _session_store.save(session_id, state, user_id=user_id, completed=is_complete)
 
     return {
         "session_id": session_id,
