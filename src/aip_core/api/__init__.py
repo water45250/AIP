@@ -687,6 +687,12 @@ def _get_next_pending_hitl(state: CourseState) -> Optional[dict]:
     if state.get("skip_all_hitl"):
         return None
 
+    # 需求解析追问阶段（HITL-1 处于 "asking"）尚未到达任何真实 HITL 确认点。
+    # 若在此返回后续 HITL（HITL-2~7 在初始化时即被置为 "pending"），前端进度轮询会把
+    # pendingHitl 覆盖成后续确认点，与 sendMessage 设置的状态冲突，导致输入框竞态消失。
+    if hitl_status.get("HITL-1") == "asking":
+        return None
+
     for hid in sorted(HITL_DEFINITIONS.keys(), key=lambda h: HITL_DEFINITIONS[h]["order"]):
         if hitl_status.get(hid) == "pending":
             return {
