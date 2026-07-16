@@ -39,6 +39,15 @@ def create_llm(model: str = None, temperature: float = 0.7) -> CrewLLM:
             api_key=api_key,
             temperature=temperature,
         )
+    elif provider == "deepseek":
+        api_key = os.getenv("DEEPSEEK_API_KEY", "")
+        if not api_key:
+            raise ValueError("DEEPSEEK_API_KEY 未设置")
+        return CrewLLM(
+            model=f"deepseek/{model}",
+            api_key=api_key,
+            temperature=temperature,
+        )
     else:
         raise ValueError(f"不支持的 LLM provider: {provider}")
 
