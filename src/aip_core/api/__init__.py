@@ -77,6 +77,65 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ============================================================
+# 全局异常处理：绝不让外部服务（硅基流动 / DeepSeek 等）的原始报错
+# （如 "input length too long"）裸漏到前端。真实错误仅记录到服务端日志，
+# 前端收到统一的中文友好提示。
+# ============================================================
+import logging
+from fastapi import Request
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
+
+logger = logging.getLogger("aip_core.api")
+
+# 单条用户输入最大字符数：超过则友好拒绝，避免把超长文本直接丢给外部 LLM/TTS
+MAX_INPUT_CHARS = 20000
+
+
+def _friendly_error(message: str, error: str = "internal_error", status: int = 422):
+    return JSONResponse(
+        status_code=status,
+        content={"detail": {"error": error, "message": message}},
+    )
+
+
+@app.exception_handler(Exception)
+async def _global_exception_handler(request: Request, exc: Exception):
+    # 记录真实错误（含外部 API 原始报文），便于事后定位根因
+    logger.error(
+        "未捕获异常 %s %s: %r",
+        request.method, request.url.path, exc, exc_info=True,
+    )
+    # HTTPException 透传，但把外部 400 的裸文本转成友好提示
+    if isinstance(exc, HTTPException):
+        if exc.status_code == 400:
+            return _friendly_error("请求无法处理，请检查输入后重试。", "bad_request", 400)
+        detail = exc.detail
+        if isinstance(detail, str) and "input length" in detail.lower():
+            detail = "输入内容过长，请精简后重试。"
+        return JSONResponse(status_code=exc.status_code, content={"detail": detail})
+    return _friendly_error(
+        "服务暂时不可用，请稍后重试。若问题持续，请联系管理员。",
+        "internal_error", 422,
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_exception_handler(request: Request, exc: RequestValidationError):
+    return _friendly_error("请求参数格式有误，请检查后重试。", "validation_error", 422)
+
+
+def _guard_input(text: str, field: str = "输入") -> None:
+    """对用户输入做长度护栏：超长直接友好拒绝，不触发外部 API 400。"""
+    if text and len(text) > MAX_INPUT_CHARS:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "input_too_long",
+                    "message": f"{field}过长（{len(text)} 字），请精简到 {MAX_INPUT_CHARS} 字以内后重试。"},
+        )
+
+
 # 全局：编译后的 Graph + Checkpointer（启动时初始化）
 _graph = None
 _checkpointer = None
@@ -303,6 +362,9 @@ async def create_course(request: CreateCourseRequest):
     """创建课程生成会话 - 发起需求解析"""
     user_id = request.user_id
 
+    # 输入长度护栏（防止超长文本触发外部 LLM/TTS 的 "input length too long"）
+    _guard_input(request.initial_message, "初始需求描述")
+
     # 内容安全审核：用户输入
     safety_result = check_user_input(request.initial_message)
     if not safety_result.passed:
@@ -360,6 +422,9 @@ async def create_course(request: CreateCourseRequest):
 @app.post("/api/course/{session_id}/message")
 async def send_message(session_id: str, request: MessageRequest):
     """发送对话消息 - 用于追问回复或继续流程"""
+    # 输入长度护栏
+    _guard_input(request.message, "回复消息")
+
     # 内容安全审核：用户消息
     safety_result = check_user_input(request.message)
     if not safety_result.passed:
