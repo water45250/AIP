@@ -64,8 +64,8 @@ DUIX_DEFAULT_VIDEO = os.getenv("DUIX_DEFAULT_VIDEO", "")
 DUIX_ENABLED = os.getenv("DUIX_ENABLED", "false").lower() == "true"
 
 # === Agent 限制 ===
-MAX_FOLLOWUP_ROUNDS = 3           # 需求追问最多轮数
-REQUIREMENT_MIN_COMPLETENESS = 60  # 需求完整度阈值
+MAX_FOLLOWUP_ROUNDS = 10           # 需求追问最多轮数（提高，避免问一两句就强制确认）
+REQUIREMENT_MIN_COMPLETENESS = 80  # 需求完整度阈值（需约6/7字段，追问持续到近完整）
 REVIEW_PASS_THRESHOLD = 80         # 审核通过分数线
 REVIEW_AUTO_SKIP_THRESHOLD = 85    # 自动跳过 HITL-5 分数线
 MAX_REVIEW_ROUNDS = 2             # 修正最多轮数

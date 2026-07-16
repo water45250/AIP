@@ -382,8 +382,12 @@ async def send_message(session_id: str, request: MessageRequest):
 
     current_node = state.get("current_node", "")
 
-    # 如果在追问阶段，重新运行需求解析
-    if state.get("hitl_status", {}).get("HITL-1") == "asking":
+    # 需求解析阶段（追问中 或 已汇总待确认）都允许继续对话补充信息：
+    # - asking：继续追问下一缺失字段
+    # - pending：用户已提供足够信息、系统已生成确认摘要，但用户可能还想补充，
+    #            此时重跑需求解析吸纳新信息并刷新确认摘要，而不是静默丢弃输入。
+    hitl1 = state.get("hitl_status", {}).get("HITL-1")
+    if hitl1 in ("asking", "pending"):
         from ..agents.requirement_agent import run_requirement_analysis
         state = run_requirement_analysis(state)
 

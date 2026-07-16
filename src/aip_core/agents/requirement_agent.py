@@ -110,6 +110,28 @@ def _generate_followup(missing_fields: list[str], round_num: int) -> str:
     return f"好的，还有一个问题：{question}"
 
 
+def _clean_topic(raw: str) -> Optional[str]:
+    """清洗正则提取出的课程主题：去首尾虚词、前置动词，剔除过短/无意义碎片。
+
+    避免「帮我做个课程」被提成「个」、「做副业变现的内容」被提成无意义片段。
+    """
+    if not raw:
+        return None
+    _strip = "的之了，,。；;、（）() "
+    topic = raw.strip(_strip)
+    for _v in ("认识", "了解", "想做", "开始", "打算", "希望", "需要", "准备",
+               "做", "讲", "讲讲", "开", "搞", "弄", "关于"):
+        if topic.startswith(_v):
+            topic = topic[len(_v):].strip(_strip)
+    topic = topic.strip(_strip)
+    if not topic or len(topic) < 2:
+        return None
+    if topic in ("一个", "个", "这门", "那个", "这个", "什么", "相关",
+                 "方面", "方向", "领域", "赛道", "内容", "账号"):
+        return None
+    return topic
+
+
 def _parse_user_input(user_message: str, existing_profile: Optional[UserProfile] = None) -> UserProfile:
     """
     解析用户输入，提取结构化画像。
@@ -161,24 +183,24 @@ def _parse_user_input(user_message: str, existing_profile: Optional[UserProfile]
                 profile["style_preference"] = style
                 break
 
-    # 4. 提取课程主题 - 宽松匹配自然表达（"ESG的系列课程" / "X培训" 等）
-    #    关键：用「认识/了解/做...」等动词就近锚定课程词，避免 (.+?) 从句首吞到句尾。
+    # 4. 提取课程主题 - 宽松匹配自然表达
+    #    覆盖：「关于X的课程」「做X的课/培训」「X运营」「X教程」
+    #         「X方向/赛道/领域的内容/账号」「做X内容」
+    #    关键：用动词就近锚定课程词，避免 (.+?) 从句首吞到句尾；并用 _clean_topic 兜底。
     if "course_topic" not in profile or not profile["course_topic"]:
         topic_patterns = [
-            r'关于(.+?)的课程',
-            r'(?:认识|了解|做|讲|讲讲|想做|打算|希望|需要)(.+?)的(?:系列)?(?:课程|课|培训|训练营)',
+            r'关于(.+?)(?:的)?(?:系列)?课程',
+            r'(?:认识|了解|做|讲|讲讲|想做|打算|希望|需要|准备|开|搞|弄)(.+?)(?:方向|赛道|领域|方面)?的?(?:系列)?(?:课程|课|培训|训练营|内容|账号|IP|ip)',
             r'做[一个门]*[关于]*(.+?)[的之]*(课程|课|培训|训练营)',
             r'(.+?)运营',
             r'(.+?)教程',
         ]
-        _lead_verbs = ("认识", "了解", "想做", "开始", "打算", "希望", "需要", "做", "讲", "讲讲")
+        _lead_verbs = ("认识", "了解", "想做", "开始", "打算", "希望", "需要",
+                       "准备", "做", "讲", "讲讲", "开", "搞", "弄")
         for pattern in topic_patterns:
             match = re.search(pattern, text)
             if match:
-                topic = match.group(1).strip()
-                for _v in _lead_verbs:
-                    if topic.startswith(_v):
-                        topic = topic[len(_v):].strip()
+                topic = _clean_topic(match.group(1))
                 if topic:
                     profile["course_topic"] = topic
                     break
@@ -195,22 +217,24 @@ def _parse_user_input(user_message: str, existing_profile: Optional[UserProfile]
                 profile["experience"] = f"{match.group(1)}年"
                 break
 
-    # 6. 提取受众 - 支持「针对/面向/服务 + 地区/人群」等自然表达
-    #    关键：把「地区 + 人口词（如务工人员）」整体保留，而非只抓到地区。
+    # 6. 提取受众 - 支持「针对/面向/服务 + 人群词」「新手/宝妈/职场人」等自然表达
+    #    注意：变现/赚钱/商业/盈利 是「目的」而非「受众」，严禁误提；
+    #          要求捕获片段长度 >= 2，避免把单字碎片当受众。
     if "target_audience" not in profile or not profile["target_audience"]:
         audience_patterns = [
-            r'(?:针对|面向|服务[于]?)(.+?(?:务工人员|学员|用户|人群|客户|读者|受众))',
-            r'(.+?(?:务工人员|学员|用户|人群|客户|读者|受众))',
+            r'(?:针对|面向|服务[于]?)(.+?)(?:，|,|。|；|、|$)',
             r'(新手|零基础|小白|入门)',
             r'(进阶|提升|有一定基础)',
-            r'(变现|赚钱|商业|盈利)',
+            r'(职场人|宝妈|上班族|学生|自由职业|创业者|职场新人|银发族)',
+            r'(学员|用户|人群|客户|读者|受众)',
         ]
         for pattern in audience_patterns:
             match = re.search(pattern, text)
             if match:
                 _g = match.group(1).strip() if (match.groups() and match.group(1)) else match.group(0).strip()
-                profile["target_audience"] = _g
-                break
+                if _g and len(_g) >= 2:
+                    profile["target_audience"] = _g
+                    break
 
     # 7. 提取专长
     if "expertise" not in profile or not profile["expertise"]:
