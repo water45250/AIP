@@ -65,7 +65,7 @@ DUIX_ENABLED = os.getenv("DUIX_ENABLED", "false").lower() == "true"
 
 # === Agent 限制 ===
 MAX_FOLLOWUP_ROUNDS = 5            # 需求追問最多輪數（5輪後強制進入確認）
-REQUIREMENT_MIN_COMPLETENESS = 43  # 需求完整度閾值（3/7字段≈43%，3輪後進入確認）
+REQUIREMENT_MIN_COMPLETENESS = 70  # 需求完整度閾值（5/7字段≈70%，信息更足才确认）
 REVIEW_PASS_THRESHOLD = 80         # 审核通过分数线
 REVIEW_AUTO_SKIP_THRESHOLD = 85    # 自动跳过 HITL-5 分数线
 MAX_REVIEW_ROUNDS = 2             # 修正最多轮数

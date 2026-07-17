@@ -8,10 +8,142 @@ M1 核心 Agent，负责：
 
 import json
 import re
+import os
 from typing import Optional
 
 from ..graph.state import CourseState, UserProfile
 from ..config import REQUIREMENT_MIN_COMPLETENESS, MAX_FOLLOWUP_ROUNDS
+
+
+# ============================================================
+# LLM 结构化提取（DeepSeek）—— 需求解析主路径
+# ============================================================
+# 需求分析阶段必须用 LLM 真正理解用户自然语言的复杂输入（如
+# "针对东南亚务工人员开始讲识ESG的系列课程"），脆弱正则无法可靠处理。
+# 正则 _parse_user_input 仅作为 LLM 不可用时的兜底。
+try:
+    from openai import OpenAI
+    _OPENAI_OK = True
+except Exception:
+    OpenAI = None
+    _OPENAI_OK = False
+
+_LLM_PROFILE_FIELDS = [
+    "identity", "expertise", "experience", "target_audience",
+    "course_topic", "delivery_format", "style_preference",
+]
+
+_EXTRACT_SYSTEM = """你是一位经验丰富的课程需求分析师。请从用户的自由文本中提取结构化信息，合并到「已有画像」中，输出 JSON。
+
+字段（未提及或无法判断则设 null）：
+- identity: 用户身份，枚举之一或自填——["知识博主","独立讲师","咨询顾问","企业培训师","其他"]
+- expertise: 核心专长/知识领域（如 "ESG"、"小红书运营"、"Python编程"）
+- experience: 从业/实践年限与背景（如 "5年ESG实战"，无则 null）
+- target_audience: 希望服务的学员人群（如 "东南亚务工人员"、"零基础宝妈"），必须是「人/群体」，不要包含课程描述
+- course_topic: 简洁纯净的课程主题短语（如 "ESG入门系列课程"、"小红书涨粉实操课"）。
+  规则：① 必须是纯净主题，剔除 "讲/认识/了解/开始/做" 等动词；
+        ② 若用户说 "讲识X的系列课程" 或 "认识X"，主题是 "X系列课程"；
+        ③ 不要以 "系列课程/课程" 开头。
+- delivery_format: 枚举之一或自填——["录播视频","直播课","训练营","图文专栏","混合"]，无则 null
+- style_preference: 枚举之一或自填——["实战干货","专业严谨","轻松幽默","故事驱动"]，无则 null
+- completeness: 0-100 整数，基于已提取的非 null 字段数估计（共 7 个字段，每约 14 分）
+
+只输出 JSON，不要其他文字。示例：{"identity":"咨询顾问","expertise":"ESG","target_audience":"东南亚务工人员","course_topic":"ESG入门系列课程","experience":null,"delivery_format":null,"style_preference":null,"completeness":57}"""
+
+
+def _call_deepseek(messages: list, temperature: float = 0.3, max_tokens: int = 700) -> Optional[str]:
+    """调用 DeepSeek 返回文本；失败/超时返回 None（由调用方回退正则）。"""
+    if not _OPENAI_OK:
+        return None
+    try:
+        client = OpenAI(
+            api_key=os.getenv("DEEPSEEK_API_KEY", ""),
+            base_url="https://api.deepseek.com",
+        )
+        resp = client.chat.completions.create(
+            model=os.getenv("LLM_MODEL", "deepseek-chat"),
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            timeout=25,
+        )
+        return resp.choices[0].message.content or ""
+    except Exception:
+        return None
+
+
+def _clean_llm_topic(t: Optional[str]) -> Optional[str]:
+    """清洗 LLM 输出的课程主题：剔除动词冗余、规整为纯净主题。"""
+    if not t:
+        return None
+    t = t.strip("的 之 ，,。；;、（）() ")
+    # 剔除开头动词/冗余词
+    for _v in ("讲识", "讲", "认识", "了解", "开始", "做", "讲讲", "打算",
+               "希望", "需要", "准备", "搞", "弄", "关于", "系列课程", "课程"):
+        if t.startswith(_v):
+            t = t[len(_v):].strip("的 之 ，,。；;、（）() ")
+    if not t:
+        return None
+    # "识ESG"/"讲ESG" 等残留规整
+    t = t.replace("识ESG", "ESG").replace("讲ESG", "ESG")
+    t = t.strip("的 之 ，,。；;、（）() ")
+    if not t or len(t) < 2:
+        return None
+    # 过短（如 "ESG"）补成 "系列课程" 兜底
+    if len(t) <= 4 and "课程" not in t and "课" not in t:
+        t = t + "系列课程"
+    if t in ("一个", "个", "这门", "那个", "这个", "什么", "相关", "方面", "方向", "领域", "赛道", "内容", "账号"):
+        return None
+    return t
+
+
+def _llm_extract_profile(text: str, existing: Optional[dict]) -> Optional[dict]:
+    """用 DeepSeek 提取并合并结构化画像；失败返回 None。"""
+    if not _OPENAI_OK:
+        return None
+    existing = existing or {}
+    user_msg = (
+        f"已有画像：{json.dumps(existing, ensure_ascii=False)}\n"
+        f"用户新输入：{text}\n\n"
+        "请基于「已有画像」合并更新（已有字段优先保留，除非新输入明确补充/修正），"
+        "输出合并后的完整 JSON。"
+    )
+    content = _call_deepseek([
+        {"role": "system", "content": _EXTRACT_SYSTEM},
+        {"role": "user", "content": user_msg},
+    ])
+    if not content:
+        return None
+    # 容错解析：截取首个 {...} 片段
+    try:
+        s = content.strip()
+        if not s.startswith("{"):
+            _m = re.search(r"\{.*\}", s, re.DOTALL)
+            if not _m:
+                return None
+            s = _m.group(0)
+        data = json.loads(s)
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    profile = {}
+    for f in _LLM_PROFILE_FIELDS:
+        v = data.get(f)
+        if v is None:
+            continue
+        v = str(v).strip()
+        if not v:
+            continue
+        if f == "course_topic":
+            v = _clean_llm_topic(v)
+            if not v:
+                continue
+        profile[f] = v
+    # 若 LLM 未给 course_topic 但给了 expertise，沿用（兜底）
+    if "course_topic" not in profile and profile.get("expertise"):
+        profile["course_topic"] = _clean_llm_topic(profile["expertise"]) or profile["expertise"]
+    return profile or None
 
 # ============================================================
 # 结构化提取 Prompt
@@ -314,8 +446,10 @@ def run_requirement_analysis(state: CourseState) -> CourseState:
     # 获取已有画像（如果是追问后再次进入）
     existing_profile = state.get("user_profile")
 
-    # 解析用户输入
-    profile = _parse_user_input(last_user_message, existing_profile)
+    # 解析用户输入：优先 LLM(DeepSeek) 提取，失败回退正则
+    profile = _llm_extract_profile(last_user_message, existing_profile)
+    if not profile:
+        profile = _parse_user_input(last_user_message, existing_profile)
 
     # 计算完整度
     completeness = _calculate_completeness(profile)
@@ -399,9 +533,25 @@ def _generate_profile_summary(profile: UserProfile, completeness: int) -> str:
 
     parts.append(f"\n📊 信息完整度：{completeness}%")
 
+    # 诚实文案：只有真正达标才说「信息充足」；信息不足时像真顾问一样
+    # 明确指出缺口，把「补充」与「确认继续」的选择权交还给用户，绝不谎称。
     if completeness >= REQUIREMENT_MIN_COMPLETENESS:
         parts.append("\n✅ 信息充足，可以开始课程生成。请确认以上信息，或选择修改/跳过。")
     else:
-        parts.append(f"\n⚠️ 信息完整度偏低（{completeness}%），已达到追问上限，将基于现有信息继续。")
+        _miss_names = {
+            "identity": "你的身份",
+            "expertise": "核心专长",
+            "experience": "从业经验",
+            "course_topic": "课程主题",
+            "target_audience": "目标学员",
+            "delivery_format": "交付形式",
+            "style_preference": "课程风格",
+        }
+        _miss = [v for k, v in _miss_names.items() if not profile.get(k)]
+        if _miss:
+            parts.append("\n⚠️ 目前信息还不足以设计出针对性强的课程，仍建议补充：" + "、".join(_miss) + "。")
+            parts.append("你可以继续补充，我再重新确认；或直接确认用现有信息开始（缺口模块会用通用方案兜底）。")
+        else:
+            parts.append("\n✅ 信息充足，可以开始课程生成。请确认以上信息，或选择修改/跳过。")
 
     return "\n".join(parts)
