@@ -728,15 +728,29 @@ def _advance_to_next(state: CourseState, current_hitl_order: int):
     # 修正：HITL-N 确认后，应执行 full_sequence[N-1] 开始的节点
     start_idx = current_hitl_order - 1
 
-    # 如果不是 skip_all，只执行紧邻的下一个节点
+    # 如果不是 skip_all，持续推进直到遇到需要等待的 HITL
     if not state.get("skip_all_hitl"):
-        # v13: 跳过已完成的节点（防止 HITL-4 确认后重入 content_production_serial 导致死循环）
-        while start_idx < len(full_sequence) and state.get("current_node") == full_sequence[start_idx]:
-            start_idx += 1
-        if start_idx < len(full_sequence):
+        # v14: 循环执行节点，直到遇到真正需要用户确认的 HITL
+        # 之前只执行一个节点就返回，导致节点完成后 current_node 不更新、
+        # 前端永远显示"生成中..."转圈（voice_tts/digital_human 等已完成但卡住）
+        while start_idx < len(full_sequence):
+            # v13: 跳过已完成的当前节点
+            if state.get("current_node") == full_sequence[start_idx]:
+                start_idx += 1
+                continue
+
             node_name = full_sequence[start_idx]
             _run_node(state, node_name)
             state["current_node"] = node_name
+
+            # 检查该节点后的 HITL 是否需要等待确认
+            next_hitl = _get_next_pending_hitl(state)
+            if next_hitl:
+                # 有待确认的 HITL → 停在这里让前端展示确认按钮
+                break
+
+            # 无待确认 HITL → 该节点的 HITL 已被确认/跳过，继续推进
+            start_idx += 1
         return
 
     # skip_all：依次执行所有剩余节点，每个节点的输出会传递到下一个
