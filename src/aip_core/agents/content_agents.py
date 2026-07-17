@@ -744,6 +744,20 @@ def _generate_fallback_pricing(outline: dict) -> dict:
 # M4: 串行编排入口
 # ============================================================
 
+def _call_with_timeout(func, args=(), kwargs={}, timeout_seconds=15):
+    """v12: timeout wrapper to prevent CrewAI hang (content_production_serial)"""
+    import threading as _th
+    result = [None]; exc = [None]
+    def target():
+        try: result[0] = func(*args, **kwargs)
+        except Exception as e: exc[0] = e
+    t = _th.Thread(target=target, daemon=True); t.start()
+    t.join(timeout=timeout_seconds)
+    if t.is_alive(): return None
+    if exc[0] is not None: return None
+    return result[0]
+
+
 def run_content_serial(state: CourseState) -> CourseState:
     """内容生产串行阶段 - LangGraph 节点函数
 
@@ -760,21 +774,19 @@ def run_content_serial(state: CourseState) -> CourseState:
     start_time = time.time()
 
     # Step 1: 营销文案
-    marketing = None
-    try:
-        marketing = _generate_marketing_sync(profile, ip, outline, cases)
-    except Exception:
-        pass
-    if not marketing or not marketing.get("sales_page"):
+    # v12: 用 threading 超时包裹 CrewAI 调用，防止 deepseek 兼容性问题（OpenAI function name
+    # cannot be empty）导致 crew.kickoff() 挂死不返回而卡死整个 content_production_serial 节点
+    marketing = _call_with_timeout(
+        _generate_marketing_sync, args=(profile, ip, outline, cases), timeout_seconds=15
+    )
+    if not marketing or not isinstance(marketing, dict) or not marketing.get("sales_page"):
         marketing = _generate_fallback_marketing(profile, ip, outline, cases)
 
     # Step 2: 定价方案
-    pricing = None
-    try:
-        pricing = _generate_pricing_sync(outline, topic)
-    except Exception:
-        pass
-    if not pricing or not pricing.get("standard_price"):
+    pricing = _call_with_timeout(
+        _generate_pricing_sync, args=(outline, topic), timeout_seconds=15
+    )
+    if not pricing or not isinstance(pricing, dict) or not pricing.get("standard_price"):
         pricing = _generate_fallback_pricing(outline)
 
     # 更新状态
