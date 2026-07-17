@@ -597,8 +597,26 @@ async def get_progress(session_id: str):
                     advanced = True
                     break
             if not advanced:
-                # 所有节点都已完成 → 标记为 packaging（终态）
-                current_node = "packaging"
+                # 所有节点都已完成 → 终态处理
+                # v16: 如果 packaging 尚未执行，在此处补执行（安全网不能只改 current_node 而不跑打包，
+                #       否则前端显示完成但 _package_path 为空，下载报错"课程尚未生成完成"）
+                if "packaging" not in completed_nodes:
+                    try:
+                        from ..agents import run_packaging
+                        run_packaging(state)
+                        current_node = "packaging"
+                        # 持久化（确保 _package_path 保存到 SQLite）
+                        _session_store.save(session_id, state, user_id=user_id, completed=True)
+                    except Exception as e:
+                        # 打包失败仍标记为 packaging（让前端显示完成），但记录错误
+                        current_node = "packaging"
+                        state["errors"] = state.get("errors", []) + [{
+                            "node": "packaging",
+                            "error": f"safety-net packaging failed: {e}",
+                            "time": time.time(),
+                        }]
+                else:
+                    current_node = "packaging"
 
     # 构建阶段状态
     stages = []
