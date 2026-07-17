@@ -730,6 +730,9 @@ def _advance_to_next(state: CourseState, current_hitl_order: int):
 
     # 如果不是 skip_all，只执行紧邻的下一个节点
     if not state.get("skip_all_hitl"):
+        # v13: 跳过已完成的节点（防止 HITL-4 确认后重入 content_production_serial 导致死循环）
+        while start_idx < len(full_sequence) and state.get("current_node") == full_sequence[start_idx]:
+            start_idx += 1
         if start_idx < len(full_sequence):
             node_name = full_sequence[start_idx]
             _run_node(state, node_name)

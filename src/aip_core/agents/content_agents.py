@@ -793,7 +793,9 @@ def run_content_serial(state: CourseState) -> CourseState:
     state["marketing_copy"] = marketing
     state["pricing_plan"] = pricing
     state["current_node"] = "content_production_serial"
-    state["hitl_status"]["HITL-4"] = "pending"
+    # v13: 只在尚未确认/跳过时才设为 pending，防止 _advance_to_next 重入时覆盖 confirmed → 死循环
+    if state.get("hitl_status", {}).get("HITL-4") not in ("confirmed", "skipped"):
+        state["hitl_status"]["HITL-4"] = "pending"
     state["node_history"] = state.get("node_history", []) + [{
         "node": "content_production_serial",
         "start": start_time,
