@@ -572,9 +572,33 @@ async def get_progress(session_id: str):
         raise HTTPException(status_code=404, detail="会话不存在或已过期")
 
     state = session["state"]
-    user_id = session.get("user_id", "anonymous")
+    user_id = state.get("user_id", "anonymous")
     current_node = state.get("current_node", "")
     hitl_status = state.get("hitl_status", {})
+
+    # v15 安全网：修复旧会话 current_node 卡在已执行完成节点上的问题
+    # 当 current_node 指向一个已在 node_history 中标记为完成的节点时，
+    # 自动推进到下一个未完成的节点（或 packaging）
+    if current_node:
+        completed_nodes = {
+            h["node"] for h in state.get("node_history", [])
+            if h.get("status") in ("ok", "partial")
+        }
+        if current_node in completed_nodes:
+            # 找到第一个不在 completed_nodes 中的后续节点
+            found_current = False
+            advanced = False
+            for n in ALL_NODES:
+                if n == current_node:
+                    found_current = True
+                    continue
+                if found_current and n not in completed_nodes:
+                    current_node = n
+                    advanced = True
+                    break
+            if not advanced:
+                # 所有节点都已完成 → 标记为 packaging（终态）
+                current_node = "packaging"
 
     # 构建阶段状态
     stages = []
@@ -733,9 +757,17 @@ def _advance_to_next(state: CourseState, current_hitl_order: int):
         # v14: 循环执行节点，直到遇到真正需要用户确认的 HITL
         # 之前只执行一个节点就返回，导致节点完成后 current_node 不更新、
         # 前端永远显示"生成中..."转圈（voice_tts/digital_human 等已完成但卡住）
+        #
+        # v15: 跳过已在 node_history 中完成的节点（修复旧会话 current_node 卡在已执行节点上的问题）
+        completed_nodes = {h.get("node") for h in state.get("node_history", []) if h.get("status") == "ok"}
+
         while start_idx < len(full_sequence):
-            # v13: 跳过已完成的当前节点
+            # v13: 跳过当前正在执行的节点（防重入）
             if state.get("current_node") == full_sequence[start_idx]:
+                start_idx += 1
+                continue
+            # v15: 跳过已执行完成的节点（防旧会话卡住）
+            if full_sequence[start_idx] in completed_nodes:
                 start_idx += 1
                 continue
 
