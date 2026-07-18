@@ -97,15 +97,18 @@ def _clean_llm_topic(t: Optional[str]) -> Optional[str]:
     return t
 
 
-def _llm_extract_profile(text: str, existing: Optional[dict]) -> Optional[dict]:
+def _llm_extract_profile(text: str, existing: Optional[dict], last_assistant_message: Optional[str] = None) -> Optional[dict]:
     """用 DeepSeek 提取并合并结构化画像；失败返回 None。"""
     if not _OPENAI_OK:
         return None
     existing = existing or {}
+    context = f"AI 刚才的问题：{last_assistant_message}\n" if last_assistant_message else ""
     user_msg = (
         f"已有画像：{json.dumps(existing, ensure_ascii=False)}\n"
+        f"{context}"
         f"用户新输入：{text}\n\n"
-        "请基于「已有画像」合并更新（已有字段优先保留，除非新输入明确补充/修正），"
+        "请基于「已有画像」合并更新（已有字段优先保留，除非新输入明确补充/修正）。"
+        "如果用户只回复 A/B/C/D/E 等选项字母，请结合 AI 刚才的问题理解对应含义。"
         "输出合并后的完整 JSON。"
     )
     content = _call_deepseek([
@@ -450,8 +453,15 @@ def run_requirement_analysis(state: CourseState) -> CourseState:
     # 获取已有画像（如果是追问后再次进入）
     existing_profile = state.get("user_profile")
 
+    # 找出上一条追问文案，帮助 LLM 理解用户只回复字母/短语的上下文
+    last_assistant_message = ""
+    for msg in reversed(messages):
+        if isinstance(msg, dict) and msg.get("role") == "assistant" and msg.get("type") == "followup":
+            last_assistant_message = msg.get("content", "")
+            break
+
     # 解析用户输入：优先 LLM(DeepSeek) 提取，失败回退正则
-    profile = _llm_extract_profile(last_user_message, existing_profile)
+    profile = _llm_extract_profile(last_user_message, existing_profile, last_assistant_message)
     if not profile:
         profile = _parse_user_input(last_user_message, existing_profile)
 
@@ -571,3 +581,4 @@ def _generate_profile_summary(profile: UserProfile, completeness: int) -> str:
             parts.append("\n✅ 信息充足，可以开始课程生成。请确认以上信息，或选择修改/跳过。")
 
     return "\n".join(parts)
+
