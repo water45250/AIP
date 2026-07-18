@@ -585,38 +585,52 @@ async def get_progress(session_id: str):
             if h.get("status") in ("ok", "partial")
         }
         if current_node in completed_nodes:
-            # 找到第一个不在 completed_nodes 中的后续节点
-            found_current = False
-            advanced = False
-            for n in ALL_NODES:
-                if n == current_node:
-                    found_current = True
+            node_to_hitl = {hdef["node"]: hid for hid, hdef in HITL_DEFINITIONS.items()}
+
+            # v17(修正): 同步确认「节点已执行完成但 HITL 仍 pending」的旧会话 HITL。
+            # 但【排除当前节点本身】——它正处于等待用户确认的状态，不能替用户越权确认，
+            # 否则会丢失用户应有的确认环节（如质量审核 HITL-7）。
+            # 这样 progress 返回的 current_hitl 不会再指向已执行节点的过期确认点
+            # （例如已到质量审核阶段却仍弹出「语音合成确认」按钮）。
+            hitl_synced = False
+            for node_name in completed_nodes:
+                if node_name == current_node:
                     continue
-                if found_current and n not in completed_nodes:
-                    current_node = n
-                    advanced = True
-                    break
-            if not advanced:
-                # 所有节点都已完成 → 终态处理
-                # v16: 如果 packaging 尚未执行，在此处补执行（安全网不能只改 current_node 而不跑打包，
-                #       否则前端显示完成但 _package_path 为空，下载报错"课程尚未生成完成"）
-                if "packaging" not in completed_nodes:
-                    try:
-                        from ..agents import run_packaging
-                        run_packaging(state)
-                        current_node = "packaging"
-                        # 持久化（确保 _package_path 保存到 SQLite）
-                        _session_store.save(session_id, state, user_id=user_id, completed=True)
-                    except Exception as e:
-                        # 打包失败仍标记为 packaging（让前端显示完成），但记录错误
-                        current_node = "packaging"
-                        state["errors"] = state.get("errors", []) + [{
-                            "node": "packaging",
-                            "error": f"safety-net packaging failed: {e}",
-                            "time": time.time(),
-                        }]
-                else:
+                hid = node_to_hitl.get(node_name)
+                if hid and state.get("hitl_status", {}).get(hid) == "pending":
+                    state["hitl_status"][hid] = "confirmed"
+                    hitl_synced = True
+            if hitl_synced:
+                # 同步结果落盘：否则后续 HITL 确认动作调用 _get_next_pending_hitl
+                # 时会再次读到过期的 pending HITL（如 HITL-5），导致状态回跳。
+                _session_store.save(session_id, state, user_id=user_id, completed=False)
+
+            # 终态：所有生产节点完成 且 全部 HITL 已确认/跳过，但 packaging 尚未执行
+            # → 补执行打包（v16）。仅当用户已确认全部环节才自动打包，避免跳过质量审核。
+            hitl_all_done = all(
+                state.get("hitl_status", {}).get(hid) in ("confirmed", "skipped")
+                for hid in HITL_DEFINITIONS
+            )
+            if hitl_all_done and "packaging" not in completed_nodes:
+                try:
+                    from ..agents import run_packaging
+                    run_packaging(state)
                     current_node = "packaging"
+                    state["current_node"] = "packaging"   # 同步 state，确保 is_complete 正确
+                    # 持久化（确保 _package_path 保存到 SQLite）
+                    _session_store.save(session_id, state, user_id=user_id, completed=True)
+                except Exception as e:
+                    # 打包失败仍标记为 packaging（让前端显示完成），但记录错误
+                    current_node = "packaging"
+                    state["current_node"] = "packaging"
+                    state["errors"] = state.get("errors", []) + [{
+                        "node": "packaging",
+                        "error": f"safety-net packaging failed: {e}",
+                        "time": time.time(),
+                    }]
+            elif "packaging" in completed_nodes:
+                current_node = "packaging"
+                state["current_node"] = "packaging"
 
     # 构建阶段状态
     stages = []
@@ -773,33 +787,28 @@ def _advance_to_next(state: CourseState, current_hitl_order: int):
     # 如果不是 skip_all，持续推进直到遇到需要等待的 HITL
     if not state.get("skip_all_hitl"):
         # v14: 循环执行节点，直到遇到真正需要用户确认的 HITL
-        # 之前只执行一个节点就返回，导致节点完成后 current_node 不更新、
-        # 前端永远显示"生成中..."转圈（voice_tts/digital_human 等已完成但卡住）
-        #
-        # v15: 跳过已在 node_history 中完成的节点（修复旧会话 current_node 卡在已执行节点上的问题）
+        # v15: 跳过已在 node_history 中完成的节点
         completed_nodes = {h.get("node") for h in state.get("node_history", []) if h.get("status") == "ok"}
 
         while start_idx < len(full_sequence):
-            # v13: 跳过当前正在执行的节点（防重入）
             if state.get("current_node") == full_sequence[start_idx]:
-                start_idx += 1
-                continue
-            # v15: 跳过已执行完成的节点（防旧会话卡住）
+                start_idx += 1; continue
             if full_sequence[start_idx] in completed_nodes:
-                start_idx += 1
-                continue
+                start_idx += 1; continue
 
             node_name = full_sequence[start_idx]
             _run_node(state, node_name)
             state["current_node"] = node_name
 
-            # 检查该节点后的 HITL 是否需要等待确认
+            # 注意：此处【不】自动确认节点对应的 HITL。
+            # 每个生产节点跑完后应当停留在它自己的 HITL 上等待用户确认
+            # （voice_tts→HITL-5, digital_human→HITL-6, quality_review→HITL-7），
+            # 若在此自动确认会把「下一个确认点」提前到尚未生产的节点，造成
+            # 「数字人还没生成就弹出数字人确认」之类的错位。
+
             next_hitl = _get_next_pending_hitl(state)
             if next_hitl:
-                # 有待确认的 HITL → 停在这里让前端展示确认按钮
                 break
-
-            # 无待确认 HITL → 该节点的 HITL 已被确认/跳过，继续推进
             start_idx += 1
         return
 
