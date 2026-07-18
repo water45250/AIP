@@ -26,8 +26,6 @@ from .state import (
     NODE_COURSE_ARCHITECTURE,
     NODE_CONTENT_PARALLEL,
     NODE_CONTENT_SERIAL,
-    NODE_VOICE_TTS,
-    NODE_DIGITAL_HUMAN,
     NODE_QUALITY_REVIEW,
     NODE_PACKAGING,
     HITL_DEFINITIONS,
@@ -68,18 +66,6 @@ def content_serial_node(state: CourseState) -> CourseState:
     return run_content_serial(state)
 
 
-def voice_tts_node(state: CourseState) -> CourseState:
-    """语音合成节点"""
-    from ..agents.voice_agent import run_voice_tts
-    return run_voice_tts(state)
-
-
-def digital_human_node(state: CourseState) -> CourseState:
-    """数字人视频合成节点"""
-    from ..agents.digital_human_agent import run_digital_human
-    return run_digital_human(state)
-
-
 def quality_review_node(state: CourseState) -> CourseState:
     """质量审核节点 - Agent 9"""
     from ..agents.review_agent import run_quality_review
@@ -111,16 +97,8 @@ HITL_ROUTES = {
         "regenerate": NODE_COURSE_ARCHITECTURE,
     },
     "HITL-4": {
-        "continue": NODE_VOICE_TTS,              # 内容确认 → 语音合成
+        "continue": NODE_QUALITY_REVIEW,         # 内容确认 → 质量审核
         "regenerate": NODE_CONTENT_PARALLEL,
-    },
-    "HITL-5": {
-        "continue": NODE_DIGITAL_HUMAN,          # 语音确认 → 数字人视频
-        "regenerate": NODE_VOICE_TTS,
-    },
-    "HITL-6": {
-        "continue": NODE_QUALITY_REVIEW,         # 数字人确认 → 质量审核
-        "regenerate": NODE_DIGITAL_HUMAN,
     },
     "HITL-7": {
         "continue": NODE_PACKAGING,              # 审核确认 → 打包
@@ -142,19 +120,6 @@ def _create_hitl_node(hitl_id: str):
         if state.get("skip_all_hitl"):
             state["hitl_status"][hitl_id] = "skipped"
             return Command(goto=routes["continue"])
-
-        # HITL-5 特殊处理：无讲稿时自动跳过语音合成确认
-        if hitl_id == "HITL-5":
-            if state.get("tts_mode") == "none":
-                state["hitl_status"][hitl_id] = "skipped"
-                return Command(goto=routes["continue"])
-
-        # HITL-6 特殊处理：数字人未启用时自动跳过
-        if hitl_id == "HITL-6":
-            dh_mode = state.get("digital_human_mode", "disabled")
-            if dh_mode in ("disabled", "skipped_no_audio"):
-                state["hitl_status"][hitl_id] = "skipped"
-                return Command(goto=routes["continue"])
 
         # HITL-7 特殊处理：审核 ≥ 85 自动跳过
         if hitl_id == "HITL-7":
@@ -250,8 +215,6 @@ def build_course_graph(checkpointer: SqliteSaver = None) -> StateGraph:
     builder.add_node(NODE_COURSE_ARCHITECTURE, course_architecture_node)
     builder.add_node(NODE_CONTENT_PARALLEL, content_parallel_node)
     builder.add_node(NODE_CONTENT_SERIAL, content_serial_node)
-    builder.add_node(NODE_VOICE_TTS, voice_tts_node)
-    builder.add_node(NODE_DIGITAL_HUMAN, digital_human_node)
     builder.add_node(NODE_QUALITY_REVIEW, quality_review_node)
     builder.add_node(NODE_PACKAGING, packaging_node)
 
@@ -260,8 +223,6 @@ def build_course_graph(checkpointer: SqliteSaver = None) -> StateGraph:
     builder.add_node("hitl_2", _create_hitl_node("HITL-2"))
     builder.add_node("hitl_3", _create_hitl_node("HITL-3"))
     builder.add_node("hitl_4", _create_hitl_node("HITL-4"))
-    builder.add_node("hitl_5", _create_hitl_node("HITL-5"))
-    builder.add_node("hitl_6", _create_hitl_node("HITL-6"))
     builder.add_node("hitl_7", _create_hitl_node("HITL-7"))
 
     # --- 编排边 ---
@@ -283,12 +244,6 @@ def build_course_graph(checkpointer: SqliteSaver = None) -> StateGraph:
 
     # 内容生产串行 → HITL-4
     builder.add_edge(NODE_CONTENT_SERIAL, "hitl_4")
-
-    # 语音合成 → HITL-5（语音确认）
-    builder.add_edge(NODE_VOICE_TTS, "hitl_5")
-
-    # 数字人视频 → HITL-6（数字人确认）
-    builder.add_edge(NODE_DIGITAL_HUMAN, "hitl_6")
 
     # 质量审核 → 条件路由（修正/HITL-7/打包）
     builder.add_conditional_edges(

@@ -602,7 +602,7 @@ async def get_progress(session_id: str):
                     hitl_synced = True
             if hitl_synced:
                 # 同步结果落盘：否则后续 HITL 确认动作调用 _get_next_pending_hitl
-                # 时会再次读到过期的 pending HITL（如 HITL-5），导致状态回跳。
+                # 时会再次读到过期的 pending HITL，导致状态回跳。
                 _session_store.save(session_id, state, user_id=user_id, completed=False)
 
             # 终态：所有生产节点完成 且 全部 HITL 已确认/跳过，但 packaging 尚未执行
@@ -719,8 +719,6 @@ def _node_label(node_name: str) -> str:
         "course_architecture": "课程架构",
         "content_production_parallel": "内容生产(讲稿/课件/案例)",
         "content_production_serial": "内容生产(营销/定价)",
-        "voice_tts": "语音合成",
-        "digital_human": "数字人视频",
         "quality_review": "质量审核",
         "packaging": "打包交付",
     }
@@ -732,8 +730,7 @@ def _run_node(state: CourseState, node_name: str):
     from ..agents import (
         run_requirement_analysis, run_ip_positioning,
         run_course_architecture, run_content_parallel,
-        run_content_serial, run_voice_tts,
-        run_digital_human,
+        run_content_serial,
         run_quality_review, run_packaging,
     )
     node_funcs = {
@@ -742,8 +739,6 @@ def _run_node(state: CourseState, node_name: str):
         "course_architecture": run_course_architecture,
         "content_production_parallel": run_content_parallel,
         "content_production_serial": run_content_serial,
-        "voice_tts": run_voice_tts,
-        "digital_human": run_digital_human,
         "quality_review": run_quality_review,
         "packaging": run_packaging,
     }
@@ -766,8 +761,6 @@ def _advance_to_next(state: CourseState, current_hitl_order: int):
         "course_architecture",
         "content_production_parallel",
         "content_production_serial",
-        "voice_tts",
-        "digital_human",
         "quality_review",
         "packaging",
     ]
@@ -802,9 +795,8 @@ def _advance_to_next(state: CourseState, current_hitl_order: int):
 
             # 注意：此处【不】自动确认节点对应的 HITL。
             # 每个生产节点跑完后应当停留在它自己的 HITL 上等待用户确认
-            # （voice_tts→HITL-5, digital_human→HITL-6, quality_review→HITL-7），
-            # 若在此自动确认会把「下一个确认点」提前到尚未生产的节点，造成
-            # 「数字人还没生成就弹出数字人确认」之类的错位。
+            # （content_production_serial→HITL-4, quality_review→HITL-7），
+            # 若在此自动确认会把「下一个确认点」提前到尚未生产的节点，造成错位。
 
             next_hitl = _get_next_pending_hitl(state)
             if next_hitl:
@@ -1004,42 +996,6 @@ async def voice_test(request: VoiceTestRequest):
             raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/course/{session_id}/audio/{lesson_id}")
-async def download_audio(session_id: str, lesson_id: str):
-    """下载单课时音频文件"""
-    from fastapi.responses import FileResponse
-    from pathlib import Path
-
-    session = _session_store.get(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="会话不存在或已过期")
-
-    audio_files = session.get("state", {}).get("audio_files", {})
-    mp3_path = audio_files.get(lesson_id)
-    if not mp3_path or not Path(mp3_path).exists():
-        raise HTTPException(status_code=404, detail=f"音频文件 {lesson_id} 不存在")
-
-    return FileResponse(mp3_path, media_type="audio/mpeg", filename=f"{lesson_id}.mp3")
-
-
-@app.get("/api/course/{session_id}/video/{lesson_id}")
-async def download_video(session_id: str, lesson_id: str):
-    """下载单课时数字人视频文件"""
-    from fastapi.responses import FileResponse
-    from pathlib import Path
-
-    session = _session_store.get(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="会话不存在或已过期")
-
-    video_files = session.get("state", {}).get("digital_human_videos", {})
-    mp4_path = video_files.get(lesson_id)
-    if not mp4_path or not Path(mp4_path).exists():
-        raise HTTPException(status_code=404, detail=f"数字人视频 {lesson_id} 不存在")
-
-    return FileResponse(mp4_path, media_type="video/mp4", filename=f"{lesson_id}.mp4")
-
-
 # ============================================================
 # M6: 课程内容查询
 # ============================================================
@@ -1048,7 +1004,7 @@ async def download_video(session_id: str, lesson_id: str):
 async def get_course_content(session_id: str, content_type: str):
     """获取课程特定内容类型（供前端预览）
 
-    content_type: outline|ip_report|scripts|slides|cases|marketing|pricing|review|audio|video
+    content_type: outline|ip_report|scripts|slides|cases|marketing|pricing|review
     """
     session = _session_store.get(session_id)
     if not session:
@@ -1064,8 +1020,6 @@ async def get_course_content(session_id: str, content_type: str):
         "marketing": state.get("marketing_copy"),
         "pricing": state.get("pricing_plan"),
         "review": state.get("review_detail"),
-        "audio": state.get("audio_files"),
-        "video": state.get("digital_human_videos"),
     }
 
     if content_type not in content_map:
@@ -1121,7 +1075,3 @@ async def root():
 @app.get("/health")
 async def health():
     return {"status": "ok", "version": "0.3.0", "sessions": _session_store.total_sessions()}
-
-# === 数字人 P0 MVP (WaveSpeed Hunyuan Avatar) ===
-from .digital_human_p0 import router as _dh_p0_router
-app.include_router(_dh_p0_router)

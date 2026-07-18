@@ -241,11 +241,11 @@ def run_quality_review(state: CourseState) -> CourseState:
     state["review_round"] = review_round + 1
     state["current_node"] = "quality_review"
 
-    # 设置 HITL-5 状态
+    # 设置审核报告确认（HITL-7）状态
     if auto_skip:
-        state["hitl_status"]["HITL-5"] = "skipped"
+        state["hitl_status"]["HITL-7"] = "skipped"
     else:
-        state["hitl_status"]["HITL-5"] = "pending"
+        state["hitl_status"]["HITL-7"] = "pending"
 
     state["node_history"] = state.get("node_history", []) + [{
         "node": "quality_review",

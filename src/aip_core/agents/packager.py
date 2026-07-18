@@ -11,8 +11,7 @@
   ├── 06_营销物料/
   ├── 07_定价方案.md
   ├── 08_审核报告.md
-  ├── 09_音频/
-  └── 10_数字人视频/
+  └── 09_音频/
 """
 
 import io
@@ -113,19 +112,9 @@ def _build_package(state: CourseState) -> bytes:
         # 08. 审核报告
         zf.writestr(f"{safe_title}/08_审核报告.md", _render_review_md(review))
 
-        # 09. 音频文件
-        audio_files = state.get("audio_files", {})
-        if audio_files:
-            for lid, mp3_path in sorted(audio_files.items()):
-                if Path(mp3_path).exists():
-                    zf.write(mp3_path, f"{safe_title}/09_音频/{lid}.mp3")
-
-        # 10. 数字人视频
-        video_files = state.get("digital_human_videos", {})
-        if video_files:
-            for lid, mp4_path in sorted(video_files.items()):
-                if Path(mp4_path).exists():
-                    zf.write(mp4_path, f"{safe_title}/10_数字人视频/{lid}.mp4")
+        # 注：语音合成（v19 删除）与数字人视频（v19 删除）节点均已移除——
+        # 二者原均无真实用户输入（语音用预置音色、数字人服务未部署空跑），
+        # 属虚假节点，故交付包不再含 09_音频 / 10_数字人视频 产物。
 
     return buf.getvalue()
 

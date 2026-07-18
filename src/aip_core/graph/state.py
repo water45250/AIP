@@ -146,8 +146,6 @@ ALL_NODES = [
     NODE_COURSE_ARCHITECTURE,
     NODE_CONTENT_PARALLEL,
     NODE_CONTENT_SERIAL,
-    NODE_VOICE_TTS,
-    NODE_DIGITAL_HUMAN,
     NODE_QUALITY_REVIEW,
     NODE_PACKAGING,
 ]
@@ -158,7 +156,5 @@ HITL_DEFINITIONS = {
     "HITL-2": {"node": NODE_IP_POSITIONING, "label": "IP 定位确认", "order": 2},
     "HITL-3": {"node": NODE_COURSE_ARCHITECTURE, "label": "课程大纲确认", "order": 3},
     "HITL-4": {"node": NODE_CONTENT_SERIAL, "label": "内容预览确认", "order": 4},
-    "HITL-5": {"node": NODE_VOICE_TTS, "label": "语音合成确认", "order": 5},
-    "HITL-6": {"node": NODE_DIGITAL_HUMAN, "label": "数字人视频确认", "order": 6},
     "HITL-7": {"node": NODE_QUALITY_REVIEW, "label": "审核报告确认", "order": 7},
 }
