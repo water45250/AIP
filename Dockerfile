@@ -5,7 +5,7 @@ WORKDIR /app
 
 # 系统依赖
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
+    curl opencc \
     && rm -rf /var/lib/apt/lists/*
 
 # Python 依赖

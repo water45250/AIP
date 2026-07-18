@@ -10,6 +10,7 @@ import re
 from typing import Optional
 
 from crewai import Agent, Task, Crew, Process
+from ..i18n import create_agent
 
 from ..graph.state import CourseState, CourseOutline
 from ..tools import get_default_llm
@@ -40,7 +41,7 @@ def _is_exam_oriented(profile: dict) -> bool:
 
 def _create_architect_agent() -> Agent:
     """创建课程架构 Agent"""
-    return Agent(
+    return create_agent(
         role="课程产品架构师",
         goal="设计结构清晰、递进合理的课程大纲，确保每个模块和课时都有明确的学习目标和交付价值",
         backstory=(

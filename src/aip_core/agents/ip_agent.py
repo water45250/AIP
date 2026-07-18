@@ -9,6 +9,7 @@ import time
 from typing import Optional
 
 from crewai import Agent, Task, Crew, Process
+from ..i18n import create_agent
 
 from ..graph.state import CourseState, IPPositioning
 from ..tools import get_default_llm
@@ -22,7 +23,7 @@ from .course_architect_agent import _is_exam_oriented
 
 def _create_ip_agent() -> Agent:
     """创建 IP 定位 Agent"""
-    return Agent(
+    return create_agent(
         role="个人IP战略顾问",
         goal="基于用户背景和行业数据，提炼差异化定位，设计人设锚点和信任飞轮，输出专业IP定位报告",
         backstory=(

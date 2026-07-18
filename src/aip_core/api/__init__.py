@@ -27,6 +27,8 @@ from ..graph import CourseState, build_course_graph, create_sqlite_checkpointer
 from ..graph.state import HITL_DEFINITIONS, ALL_NODES
 from ..config import MAX_CONCURRENT_SESSIONS, SQLITE_DB_PATH
 from ..content_safety import check_user_input, check_ai_output
+from ..i18n import to_traditional
+from fastapi import Request, Response
 
 # ============================================================
 # Pydantic 模型
@@ -76,6 +78,29 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ============================================================
+# 繁體中文響應中間件：將所有 JSON 回應中的中文字串轉為繁體中文（OpenCC s2t 兜底）。
+# 與各 Agent 系統提示詞中的「繁體中文」指令雙重保障，確保前端看到的輸出皆為繁體。
+# ============================================================
+@app.middleware("http")
+async def _traditional_chinese_response(request: Request, call_next):
+    response = await call_next(request)
+    if "application/json" not in response.headers.get("content-type", ""):
+        return response
+    body = b""
+    async for chunk in response.body_iterator:
+        body += chunk if isinstance(chunk, bytes) else chunk.encode("utf-8")
+    try:
+        data = json.loads(body.decode("utf-8"))
+        data = to_traditional(data)
+        new_body = json.dumps(data, ensure_ascii=False).encode("utf-8")
+    except Exception:
+        new_body = body
+    headers = {k: v for k, v in response.headers.items() if k.lower() != "content-length"}
+    return Response(content=new_body, status_code=response.status_code,
+                    headers=headers, media_type="application/json")
+
 
 # ============================================================
 # 全局异常处理：绝不让外部服务（硅基流动 / DeepSeek 等）的原始报错
