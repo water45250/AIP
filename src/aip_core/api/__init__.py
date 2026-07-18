@@ -854,11 +854,25 @@ async def download_package(session_id: str):
     if not session:
         raise HTTPException(status_code=404, detail="会话不存在或已过期")
 
-    package_path = session.get("state", {}).get("_package_path")
+    state = session.get("state", {})
+    package_path = state.get("_package_path")
+    # v20: 用户直接点「下载课程包」时，若尚未打包或包文件丢失，先 lazy 补打一次。
+    # 此前打包只在 progress 轮询的 safety-net 中触发，download 端点本身不重试，
+    # 导致「永远返回『课程包尚未生成』」的死结。取值已全面兜底（or {} / or []），
+    # 即使个别节点内容缺失也会生成骨架包，run_packaging 不再崩溃。
     if not package_path or not Path(package_path).exists():
-        raise HTTPException(status_code=404, detail="课程包尚未生成，请等待打包完成")
+        try:
+            from ..agents import run_packaging
+            run_packaging(state)
+            _session_store.save(session_id, state, user_id=state.get("user_id"), completed=True)
+            package_path = state.get("_package_path")
+        except Exception as e:
+            raise HTTPException(status_code=404, detail=f"课程包生成失败: {e}")
 
-    outline = session.get("state", {}).get("course_outline", {})
+    if not package_path or not Path(package_path).exists():
+        raise HTTPException(status_code=404, detail="课程包尚未生成，请稍后重试")
+
+    outline = state.get("course_outline") or {}
     title = outline.get("course_title", "课程包")
     safe_title = title.replace(" ", "_").replace("/", "_")[:50]
 

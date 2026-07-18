@@ -63,15 +63,19 @@ def run_packaging(state: CourseState) -> CourseState:
 
 def _build_package(state: CourseState) -> bytes:
     """构建课程 ZIP 包"""
-    profile = state.get("user_profile", {})
-    ip = state.get("ip_positioning", {})
-    outline = state.get("course_outline", {})
-    scripts = state.get("scripts", {})
-    slides = state.get("slides", {})
-    cases = state.get("cases", [])
-    marketing = state.get("marketing_copy", {})
-    pricing = state.get("pricing_plan", {})
-    review = state.get("review_detail", {})
+    # 注意：state.get(k, {}) 仅在 key【缺失】时回退默认值；
+    # 若 key 存在但值为 None（如质量审核节点未产出 review_detail=None），
+    # 会返回 None 并在后续 .get() 调用时崩溃。统一用 `or {}` / `or []` 兜底，
+    # 保证任何内容缺失都能生成骨架 ZIP 而非打包失败（v20 修复）。
+    profile = state.get("user_profile") or {}
+    ip = state.get("ip_positioning") or {}
+    outline = state.get("course_outline") or {}
+    scripts = state.get("scripts") or {}
+    slides = state.get("slides") or {}
+    cases = state.get("cases") or []
+    marketing = state.get("marketing_copy") or {}
+    pricing = state.get("pricing_plan") or {}
+    review = state.get("review_detail") or {}
 
     course_title = outline.get("course_title", "课程")
     # 清理文件名
