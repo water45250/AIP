@@ -12,6 +12,7 @@ from crewai import Agent, Task, Crew, Process
 
 from ..graph.state import CourseState, IPPositioning
 from ..tools import get_default_llm, KnowledgeSearchTool, WebSearchTool, LocalKnowledgeSearchTool
+from ._crew_runner import run_crew
 
 
 # ============================================================
@@ -155,7 +156,7 @@ def run_ip_positioning(state: CourseState) -> CourseState:
             process=Process.sequential,
             verbose=False,
         )
-        result = crew.kickoff()
+        result = run_crew(crew)
 
         # 从结果中提取 JSON
         raw_output = str(result.raw) if hasattr(result, 'raw') else str(result)

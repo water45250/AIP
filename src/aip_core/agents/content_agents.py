@@ -23,6 +23,7 @@ from crewai import Agent, Task, Crew, Process
 
 from ..graph.state import CourseState
 from ..tools import get_default_llm, WebSearchTool, LocalKnowledgeSearchTool
+from ._crew_runner import run_crew
 
 
 # ============================================================
@@ -92,7 +93,7 @@ def _write_scripts_sync(outline: dict, profile: dict, ip: dict) -> dict:
 
     try:
         crew = Crew(agents=[task.agent], tasks=[task], process=Process.sequential, verbose=False)
-        result = crew.kickoff()
+        result = run_crew(crew)
         raw = str(result.raw) if hasattr(result, 'raw') else str(result)
         return _extract_json(raw) or {}
     except Exception:
@@ -242,7 +243,7 @@ def _design_slides_sync(outline: dict, scripts: dict) -> dict:
 
     try:
         crew = Crew(agents=[task.agent], tasks=[task], process=Process.sequential, verbose=False)
-        result = crew.kickoff()
+        result = run_crew(crew)
         raw = str(result.raw) if hasattr(result, 'raw') else str(result)
         return _extract_json(raw) or {}
     except Exception:
@@ -365,7 +366,7 @@ def _mine_cases_sync(topic: str, tags: list) -> list:
 
     try:
         crew = Crew(agents=[task.agent], tasks=[task], process=Process.sequential, verbose=False)
-        result = crew.kickoff()
+        result = run_crew(crew)
         raw = str(result.raw) if hasattr(result, 'raw') else str(result)
         return _extract_json(raw) or []
     except Exception:
@@ -583,7 +584,7 @@ def _generate_marketing_sync(profile: dict, ip: dict, outline: dict, cases: list
 
     try:
         crew = Crew(agents=[task.agent], tasks=[task], process=Process.sequential, verbose=False)
-        result = crew.kickoff()
+        result = run_crew(crew)
         raw = str(result.raw) if hasattr(result, 'raw') else str(result)
         return _extract_json(raw) or {}
     except Exception:
@@ -705,7 +706,7 @@ def _generate_pricing_sync(outline: dict, topic: str) -> dict:
 
     try:
         crew = Crew(agents=[task.agent], tasks=[task], process=Process.sequential, verbose=False)
-        result = crew.kickoff()
+        result = run_crew(crew)
         raw = str(result.raw) if hasattr(result, 'raw') else str(result)
         return _extract_json(raw) or {}
     except Exception:

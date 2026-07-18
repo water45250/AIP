@@ -15,6 +15,7 @@ from crewai import Agent, Task, Crew, Process
 from ..graph.state import CourseState
 from ..tools import get_default_llm
 from ..config import REVIEW_PASS_THRESHOLD, REVIEW_AUTO_SKIP_THRESHOLD, MAX_REVIEW_ROUNDS
+from ._crew_runner import run_crew
 
 
 # ============================================================
@@ -129,7 +130,7 @@ auto_skip_hitl 为 true 表示 total_score >= 85。
 
     try:
         crew = Crew(agents=[task.agent], tasks=[task], process=Process.sequential, verbose=False)
-        result = crew.kickoff()
+        result = run_crew(crew)
         raw = str(result.raw) if hasattr(result, 'raw') else str(result)
         return _extract_json(raw) or {}
     except Exception:
