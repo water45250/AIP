@@ -11,7 +11,7 @@ from typing import Optional
 from crewai import Agent, Task, Crew, Process
 
 from ..graph.state import CourseState, IPPositioning
-from ..tools import get_default_llm, KnowledgeSearchTool, WebSearchTool, LocalKnowledgeSearchTool
+from ..tools import get_default_llm
 from ._crew_runner import run_crew
 
 
@@ -32,7 +32,6 @@ def _create_ip_agent() -> Agent:
             "3. 设计可落地的内容矩阵和信任建立路径\n"
             "你的方法论核心是'定位三角'：我是谁 × 帮谁 × 解决什么问题。"
         ),
-        tools=[LocalKnowledgeSearchTool(), KnowledgeSearchTool(), WebSearchTool()],
         llm=get_default_llm(),
         verbose=False,
         allow_delegation=False,
@@ -61,9 +60,8 @@ def _create_ip_task(agent: Agent, user_profile: dict) -> Task:
 - 风格偏好：{style}
 
 ## 任务步骤
-1. 先用「本地知识库搜索」查询"IP定位"和"课程设计"获取方法论
-2. 再用「联网搜索」查询"{topic} 课程 竞品"了解市场情况
-3. 综合分析和搜索结果为用户设计：
+1. 基于你的个人品牌方法论专业知识，为用户设计差异化定位
+2. 直接综合用户优势与目标市场，输出：
    - 一句定位宣言（格式：帮 [谁] 通过 [什么方法] 实现 [什么结果]）
    - 3-5个差异化标签
    - 4步信任飞轮

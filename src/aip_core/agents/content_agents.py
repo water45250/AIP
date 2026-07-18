@@ -22,7 +22,7 @@ from typing import Optional
 from crewai import Agent, Task, Crew, Process
 
 from ..graph.state import CourseState
-from ..tools import get_default_llm, WebSearchTool, LocalKnowledgeSearchTool
+from ..tools import get_default_llm
 from ._crew_runner import run_crew
 
 
@@ -305,21 +305,22 @@ def _generate_fallback_slides(outline: dict) -> dict:
 # Agent 6: 案例挖掘师
 # ============================================================
 
-CASE_MINER_BACKSTORY = """你是一位行业研究专家，擅长挖掘和整理高质量的行业案例。
+CASE_MINER_BACKSTORY = """你是一位专注ESG（环境、社会、治理）领域的行业研究专家，熟悉真实的ESG法规、事件与企业实践。
 你的案例标准：
-1. 真实可信：优先使用有公开来源的案例
-2. 相关性强：案例必须与课程主题高度相关
-3. 结构化呈现：背景→挑战→方案→结果→启示
-4. 数据支撑：尽可能提供具体数字
+1. 真实可信：必须基于真实发生的事件/政策/企业实践，包含具体的公司或机构名称与年份，禁止虚构
+2. 可考据：尽量给出信息来源（如监管文件、企业年报、权威媒体）
+3. 相关性强：案例必须与课程主题高度相关
+4. 结构化呈现：背景→挑战→方案→结果→启示
+5. 数据支撑：尽可能提供真实的具体数字
+注意：不要依赖外部搜索工具，直接基于你自身的专业知识储备输出真实案例。
 """
 
 
 def _create_case_miner() -> Agent:
     return Agent(
-        role="案例挖掘师",
-        goal="为课程挖掘3-5个高质量的行业案例，支撑教学内容",
+        role="ESG行业案例研究专家",
+        goal="为ESG课程挖掘3-5个真实、可考据的高质量行业案例，支撑教学内容",
         backstory=CASE_MINER_BACKSTORY,
-        tools=[LocalKnowledgeSearchTool(), WebSearchTool()],
         llm=get_default_llm(),
         verbose=False,
         allow_delegation=False,
@@ -332,7 +333,7 @@ def _mine_cases_sync(topic: str, tags: list) -> list:
     tags_str = ", ".join(tags) if tags else topic
 
     task = Task(
-        description=f"""请为以下课程主题挖掘3-5个高质量的行业案例。
+        description=f"""请为以下课程主题挖掘3-5个真实、可考据的高质量行业案例。
 
 ## 课程主题
 {topic}
@@ -341,21 +342,19 @@ def _mine_cases_sync(topic: str, tags: list) -> list:
 {tags_str}
 
 ## 任务
-1. 先用「本地知识库搜索」查询相关案例
-2. 再用「联网搜索」搜索最新行业案例
-3. 整理3-5个案例，每个案例包含完整结构
+直接基于你的专业知识储备，列出3-5个真实发生的ESG案例（例如：真实的环保处罚/诉讼事件、碳关税/碳交易政策、企业ESG报告实践、绿色债券/可持续融资、供应链尽职调查、社会责任争议等）。每个案例必须具体、可查证，包含真实的公司/机构名称与年份，禁止编造。
 
-## 输出格式（严格 JSON）
+## 输出格式（严格 JSON 数组）
 ```json
 [
   {{
-    "title": "案例标题",
-    "background": "案例背景（2-3句话）",
+    "title": "案例标题（含公司/机构与年份）",
+    "background": "案例背景（2-3句，含真实事实）",
     "challenge": "面临的核心挑战",
-    "solution": "解决方案（3-5步）",
-    "results": "具体结果（尽可能有数据）",
-    "source": "信息来源",
-    "relevance": "与本课程的关联说明"
+    "solution": "解决方案（3-5步，具体措施）",
+    "results": "具体结果（尽可能有真实数据/数字）",
+    "source": "信息来源（如监管文件/企业年报/权威媒体）",
+    "relevance": "与本课程ESG知识体系的关联说明"
   }}
 ]
 ```
@@ -649,10 +648,10 @@ def _generate_fallback_marketing(profile: dict, ip: dict, outline: dict, cases: 
 PRICING_AGENT_BACKSTORY = """你是一位课程定价策略专家，擅长基于市场数据和课程规模制定科学的定价方案。
 你的定价原则：
 1. 基于课程实际价值（课时数、深度、服务配套）
-2. 参考同领域竞品价格区间
+2. 参考知识付费领域同类ESG/职业技能课程的真实市场价格区间（如训练营常见 ¥299-¥3999）
 3. 设计阶梯定价，让不同预算的学员都有选择
 4. 早鸟价要有真实的紧迫感
-5. 定价依据必须清晰可解释"""
+5. 定价依据必须清晰可解释，基于课程规模给出合理判断"""
 
 
 def _create_pricing_agent() -> Agent:
@@ -660,7 +659,6 @@ def _create_pricing_agent() -> Agent:
         role="课程定价策略师",
         goal="基于课程规模和市场数据，制定科学的定价方案和促销策略",
         backstory=PRICING_AGENT_BACKSTORY,
-        tools=[WebSearchTool(), LocalKnowledgeSearchTool()],
         llm=get_default_llm(),
         verbose=False,
         allow_delegation=False,
@@ -683,8 +681,8 @@ def _generate_pricing_sync(outline: dict, topic: str) -> dict:
 - 课程形式：训练营（录播+直播+社群）
 
 ## 任务
-1. 用「联网搜索」查询"{topic} 课程 价格 2025"了解市场行情
-2. 基于课程规模和竞品数据，制定阶梯定价方案
+1. 基于课程规模（课时数、时长、服务配套）和市场同类知识付费课程的真实价格区间，制定阶梯定价方案
+2. 价格需合理、有竞争力，并给出清晰可解释的定价依据
 
 ## 输出格式（严格 JSON）
 ```json
