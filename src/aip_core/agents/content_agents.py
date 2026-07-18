@@ -24,6 +24,7 @@ from crewai import Agent, Task, Crew, Process
 from ..graph.state import CourseState
 from ..tools import get_default_llm
 from ._crew_runner import run_crew
+from .course_architect_agent import _is_exam_oriented
 
 
 # ============================================================
@@ -542,9 +543,25 @@ def _generate_marketing_sync(profile: dict, ip: dict, outline: dict, cases: list
     total_modules = outline.get("total_modules", 4)
     total_lessons = outline.get("total_lessons", 12)
     case_names = [c.get("title", "") for c in cases[:2]]
+    exam_oriented = _is_exam_oriented(profile)
+
+    if exam_oriented:
+        mode_block = (
+            "【物料类型】政府/企业强制的ESG上岗考试培训——严禁任何『售卖/促销/变现/限时优惠/成交逼单』话术。\n"
+            "请生成『培训与备考支持物料』，字段含义调整为：\n"
+            "- sales_page → 改为『培训说明与学习指南』：课程目标、考试大纲与重点、学习安排、考试须知、学习建议（不要销售口吻）\n"
+            "- moments → 改为『考点打卡/学习朋友圈』：分享每日高频考点、易错提醒、学习进度（不卖课、不促销）\n"
+            "- community_script → 改为『备考学习群话术』：入群欢迎、每日考点播报、考前动员、考后复盘\n"
+            "- video_outlines → 改为『考点精讲短视频』：每条约60秒讲清一个高频考点"
+        )
+    else:
+        mode_block = (
+            "【物料类型】知识付费/技能变现类课程——生成高转化营销物料。\n"
+            "字段含义：sales_page=销售页；moments=朋友圈文案；community_script=社群话术；video_outlines=短视频脚本"
+        )
 
     task = Task(
-        description=f"""请为以下课程生成多版本营销物料。
+        description=f"""请为以下课程生成物料。
 
 ## 课程信息
 - 课程标题：{course_title}
@@ -555,20 +572,22 @@ def _generate_marketing_sync(profile: dict, ip: dict, outline: dict, cases: list
 - 课程规模：{total_modules}模块/{total_lessons}课时
 - 相关案例：{', '.join(case_names) if case_names else '行业典型案例'}
 
+{mode_block}
+
 ## 输出格式（严格 JSON）
 ```json
 {{
-  "sales_page": "课程销售页完整文案（包含痛点引入、课程亮点、大纲预览、信任背书、CTA）",
+  "sales_page": "（按上述字段含义填写）",
   "moments": [
-    "朋友圈文案1：痛点切入型",
-    "朋友圈文案2：成果展示型",
-    "朋友圈文案3：故事驱动型"
+    "朋友圈/打卡文案1",
+    "朋友圈/打卡文案2",
+    "朋友圈/打卡文案3"
   ],
   "community_script": {{
-    "welcome": "入群欢迎话术",
-    "teaser": "价值预告话术",
-    "flash_sale": "限时优惠话术",
-    "close": "成交逼单话术"
+    "welcome": "入群/欢迎话术",
+    "teaser": "价值预告/考点播报话术",
+    "flash_sale": "限时/考前动员话术（考试类请勿出现促销）",
+    "close": "结课/复盘话术"
   }},
   "video_outlines": [
     {{"duration": "60秒", "content": "短视频脚本概要"}},
@@ -576,8 +595,8 @@ def _generate_marketing_sync(profile: dict, ip: dict, outline: dict, cases: list
   ]
 }}
 ```
-营销文案必须与IP定位保持一致。禁止承诺具体收益数字。只返回 JSON。""",
-        expected_output="符合 JSON 格式的营销物料",
+物料必须与IP定位及课程类型保持一致。考试培训类严禁承诺收益或促销。只返回 JSON。""",
+        expected_output="符合 JSON 格式的物料",
         agent=_create_marketing_agent(),
     )
 
@@ -591,13 +610,47 @@ def _generate_marketing_sync(profile: dict, ip: dict, outline: dict, cases: list
 
 
 def _generate_fallback_marketing(profile: dict, ip: dict, outline: dict, cases: list) -> dict:
-    """降级方案：基于模板生成营销文案"""
+    """降级方案：基于模板生成营销文案（考试类自动转为培训说明/备考支持口径）"""
     topic = profile.get("course_topic", "专业技能")
     audience = profile.get("target_audience", "目标学员")
     statement = ip.get("positioning_statement", "")
     course_title = outline.get("course_title", f"{topic}实战训练营")
     total_modules = outline.get("total_modules", 4)
     total_lessons = outline.get("total_lessons", 12)
+
+    if _is_exam_oriented(profile):
+        return {
+            "sales_page": (
+                f"# {course_title} · 培训说明与学习指南\n\n"
+                f"## 培训目标\n"
+                f"帮助{audience}系统掌握{topic}上岗考试核心知识与合规操作，顺利通过考试、持证上岗。\n\n"
+                f"## 考试大纲与重点\n"
+                f"- 共{total_modules}大模块、{total_lessons}课时，覆盖认知→方法→实战→备考全链路\n"
+                f"- 重点：ESG三大支柱（环境/社会/治理）、实施与信息披露、岗位合规操作、应试技巧\n\n"
+                f"## 学习安排\n"
+                f"1. 按模块顺序学习，每课时完成后完成课后任务\n"
+                f"2. 加入备考学习群，参与每日考点播报与答疑\n"
+                f"3. 结课前完成模拟真题演练，查漏补缺\n\n"
+                f"## 考试须知\n"
+                f"- 本课程为政府/企业强制上岗考试培训，学员按企业统一安排参加\n"
+                f"- 学习建议：抓大纲、重真题、勤复盘，避免死记硬背\n"
+            ),
+            "moments": [
+                f"今日考点：{topic}三大支柱速记口诀，转发给一起备考的工友 📌",
+                f"易错提醒：{topic}实施中最常被罚的3个动作，考前务必核对 ✅",
+                f"学习打卡第N天：已完成{total_lessons}课时中的一半，进度过半继续冲 💪",
+            ],
+            "community_script": {
+                "welcome": f"🎉 欢迎加入《{course_title}》备考学习群！接下来我们一起通关上岗考试。请先做自我介绍：我是谁+我的岗位+最担心的考点。",
+                "teaser": f"📣 明早8点，群内播报今日高频考点与1道典型真题，记得查收！",
+                "flash_sale": f"📌 考前提醒：距离模拟考还有3天，未完成课时的同学请抓紧，群内可互助答疑。",
+                "close": f"✅ 结课复盘：恭喜完成全部课时！考前再做1套模拟卷，按答题模板规范作答，你一定能过。",
+            },
+            "video_outlines": [
+                {"duration": "60秒", "content": f"开头：1个真实违规案例引出考点 → 讲解：本课时核心概念 → 收尾：一句口诀帮助记忆"},
+                {"duration": "3分钟", "content": f"开头：真题题干 → 拆解：考点与采分点 → 演示：标准答题模板 → 提醒：常见扣分点"},
+            ],
+        }
 
     return {
         "sales_page": (
@@ -666,39 +719,64 @@ def _create_pricing_agent() -> Agent:
     )
 
 
-def _generate_pricing_sync(outline: dict, topic: str) -> dict:
+def _generate_pricing_sync(outline: dict, topic: str, profile: dict = None) -> dict:
     """同步版本：生成定价方案"""
     total_lessons = outline.get("total_lessons", 12)
     total_duration = outline.get("total_duration_minutes", 480)
+    exam_oriented = _is_exam_oriented(profile or {})
+
+    if exam_oriented:
+        mode_block = (
+            "【课程类型】政府/企业强制的ESG上岗考试培训。\n"
+            "定价应体现为『企业/机构统一采购、学员免费或低成本参加』的 Training/内训费用口径，\n"
+            "不要按知识付费个人课程标价。可给出：企业内训采购价、含考试认证的套餐价、学员自费部分（如有）。"
+        )
+        price_hint = (
+            '  "standard_price": 0,\n'
+            '  "early_bird_price": 0,\n'
+            '  "tiered_pricing": [\n'
+            '    {"tier": "企业内训采购（按人数）", "price": 0, "includes": ["全套课程", "考试辅导", "证书"]},\n'
+            '    {"tier": "含认证套餐", "price": 0, "includes": ["课程+官方考试报名"]},\n'
+            '    {"tier": "学员自费补差", "price": 0, "includes": ["教材/模拟题/补考"]}\n'
+            "  ],"
+        )
+    else:
+        mode_block = (
+            "【课程类型】知识付费/技能变现类课程。\n"
+            "基于课程规模（课时数、时长、服务配套）和市场同类课程的真实价格区间制定阶梯定价。"
+        )
+        price_hint = (
+            '  "standard_price": 1999,\n'
+            '  "early_bird_price": 1299,\n'
+            '  "tiered_pricing": [\n'
+            '    {"tier": "基础版", "price": 999, "includes": ["内容1", "内容2"]}},\n'
+            '    {"tier": "进阶版", "price": 1999, "includes": ["内容1", "内容2", "内容3"]}},\n'
+            '    {"tier": "全套版", "price": 3999, "includes": ["内容1", "内容2", "内容3", "内容4"]}}\n'
+            "  ],"
+        )
 
     task = Task(
-        description=f"""请为以下课程制定定价方案。
+        description=f"""请为以下课程制定定价/费用方案。
 
 ## 课程信息
 - 主题：{topic}
 - 课时数：{total_lessons}课时
 - 总时长：{total_duration}分钟
-- 课程形式：训练营（录播+直播+社群）
+
+{mode_block}
 
 ## 任务
-1. 基于课程规模（课时数、时长、服务配套）和市场同类知识付费课程的真实价格区间，制定阶梯定价方案
-2. 价格需合理、有竞争力，并给出清晰可解释的定价依据
+基于课程定位给出清晰、可解释的费用/定价说明（2-3句话依据）。
 
 ## 输出格式（严格 JSON）
 ```json
 {{
-  "standard_price": 1999,
-  "early_bird_price": 1299,
-  "tiered_pricing": [
-    {{"tier": "基础版", "price": 999, "includes": ["内容1", "内容2"]}},
-    {{"tier": "进阶版", "price": 1999, "includes": ["内容1", "内容2", "内容3"]}},
-    {{"tier": "全套版", "price": 3999, "includes": ["内容1", "内容2", "内容3", "内容4"]}}
-  ],
-  "rationale": "定价依据说明（2-3句话）"
+{price_hint}
+  "rationale": "费用/定价依据说明（2-3句话）"
 }}
 ```
-价格单位：人民币元。只返回 JSON。""",
-        expected_output="符合 JSON 格式的定价方案",
+价格单位：人民币元（学员免费请填 0 并在 rationale 说明由企业/机构统一采购）。只返回 JSON。""",
+        expected_output="符合 JSON 格式的费用/定价方案",
         agent=_create_pricing_agent(),
     )
 
@@ -711,10 +789,26 @@ def _generate_pricing_sync(outline: dict, topic: str) -> dict:
         return {}
 
 
-def _generate_fallback_pricing(outline: dict) -> dict:
-    """降级方案：基于课程规模估算定价"""
+def _generate_fallback_pricing(outline: dict, profile: dict = None) -> dict:
+    """降级方案：基于课程规模估算定价（考试类自动转为企业采购/学员免费口径）"""
     total_lessons = outline.get("total_lessons", 12)
     total_duration = outline.get("total_duration_minutes", 480)
+
+    # 考试类兜底：学员免费、由企业/机构统一采购，绝不按知识付费个人课标价
+    if _is_exam_oriented(profile or {}):
+        return {
+            "standard_price": 0,
+            "early_bird_price": 0,
+            "tiered_pricing": [
+                {"tier": "企业内训采购（按人数）", "price": 0,
+                 "includes": ["全套课程", "考试辅导", "证书"]},
+                {"tier": "含认证套餐", "price": 0,
+                 "includes": ["课程+官方考试报名"]},
+                {"tier": "学员自费补差", "price": 0,
+                 "includes": ["教材/模拟题/补考"]},
+            ],
+            "rationale": f"本课程为政府/企业强制的ESG上岗考试培训，标准定价设为0元，由企业/机构统一采购；学员个人无需付费。基于{total_lessons}课时/{total_duration}分钟课程规模设计。",
+        }
 
     # 基于课时数估算
     if total_lessons <= 8:
@@ -775,18 +869,19 @@ def run_content_serial(state: CourseState) -> CourseState:
     # Step 1: 营销文案
     # v12: 用 threading 超时包裹 CrewAI 调用，防止 deepseek 兼容性问题（OpenAI function name
     # cannot be empty）导致 crew.kickoff() 挂死不返回而卡死整个 content_production_serial 节点
+    # v23: 超时由 15s 提升到 60s（v22 已移除导致卡死的坏工具，且考试类物料生成较慢，过短会误触模板兜底）
     marketing = _call_with_timeout(
-        _generate_marketing_sync, args=(profile, ip, outline, cases), timeout_seconds=15
+        _generate_marketing_sync, args=(profile, ip, outline, cases), timeout_seconds=60
     )
     if not marketing or not isinstance(marketing, dict) or not marketing.get("sales_page"):
         marketing = _generate_fallback_marketing(profile, ip, outline, cases)
 
     # Step 2: 定价方案
     pricing = _call_with_timeout(
-        _generate_pricing_sync, args=(outline, topic), timeout_seconds=15
+        _generate_pricing_sync, args=(outline, topic, profile), timeout_seconds=60
     )
     if not pricing or not isinstance(pricing, dict) or not pricing.get("standard_price"):
-        pricing = _generate_fallback_pricing(outline)
+        pricing = _generate_fallback_pricing(outline, profile)
 
     # 更新状态
     state["marketing_copy"] = marketing

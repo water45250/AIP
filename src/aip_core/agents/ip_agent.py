@@ -13,6 +13,7 @@ from crewai import Agent, Task, Crew, Process
 from ..graph.state import CourseState, IPPositioning
 from ..tools import get_default_llm
 from ._crew_runner import run_crew
+from .course_architect_agent import _is_exam_oriented
 
 
 # ============================================================
@@ -47,6 +48,19 @@ def _create_ip_task(agent: Agent, user_profile: dict) -> Task:
     audience = user_profile.get("target_audience", "目标学员")
     topic = user_profile.get("course_topic", expertise)
     style = user_profile.get("style_preference", "实战干货")
+    exam_oriented = _is_exam_oriented(user_profile)
+
+    if exam_oriented:
+        exam_note = (
+            "【课程定位】政府/企业强制的ESG上岗考试培训。\n"
+            "定位宣言中的『结果』应为『通过ESG上岗考试、合规持证上岗』，不要出现『变现/加薪/副业/个人品牌』等商业化表述。\n"
+            "信任飞轮改为『学习动员→考点精讲→模拟演练→考前陪伴』；内容矩阵围绕备考支持（考点卡片、答疑、模拟卷）。"
+        )
+    else:
+        exam_note = (
+            "【课程定位】知识付费/技能变现类课程。\n"
+            "定位宣言的『结果』可为『实现能力跃迁/变现』，可使用个人品牌与信任飞轮方法论。"
+        )
 
     task_description = f"""
 请基于以下用户画像，生成一份完整的 IP 定位报告。
@@ -59,12 +73,14 @@ def _create_ip_task(agent: Agent, user_profile: dict) -> Task:
 - 课程主题：{topic}
 - 风格偏好：{style}
 
+{exam_note}
+
 ## 任务步骤
 1. 基于你的个人品牌方法论专业知识，为用户设计差异化定位
 2. 直接综合用户优势与目标市场，输出：
    - 一句定位宣言（格式：帮 [谁] 通过 [什么方法] 实现 [什么结果]）
    - 3-5个差异化标签
-   - 4步信任飞轮
+   - 4步信任飞轮（考试类请按备考支持设计）
    - 内容矩阵建议
 
 ## 输出格式（严格 JSON）

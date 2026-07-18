@@ -20,18 +20,39 @@ from ._crew_runner import run_crew
 # CrewAI Agent 定义
 # ============================================================
 
+def _is_exam_oriented(profile: dict) -> bool:
+    """判断课程是否为『考试/上岗培训』导向。
+
+    考试导向课程（如政府/企业强制的ESG上岗考试）末模块应为『备考应试』，
+    不得出现变现/加薪/个人品牌等商业化内容；否则沿用『变现闭环』。
+    """
+    if profile.get("exam_oriented"):
+        return True
+    text = " ".join(str(profile.get(k, "")) for k in (
+        "course_topic", "expertise", "experience", "target_audience",
+        "goals", "pain_points", "style_preference",
+    ))
+    text += " " + str(profile.get("ip_positioning", {}).get("positioning_statement", ""))
+    keywords = ["考试", "上岗", "强制", "考证", "培训", "合规", "持证",
+                "必过", "内训", "ESG", "esg", "Esg"]
+    return any(k in text for k in keywords)
+
+
 def _create_architect_agent() -> Agent:
     """创建课程架构 Agent"""
     return Agent(
         role="课程产品架构师",
         goal="设计结构清晰、递进合理的课程大纲，确保每个模块和课时都有明确的学习目标和交付价值",
         backstory=(
-            "你是一位资深课程产品架构师，曾为上百位知识付费创作者设计过课程体系。\n"
+            "你是一位资深课程产品架构师，曾为各类培训与知识产品设计并交付课程体系。\n"
             "你的核心设计理念是'四阶递进模型'：\n"
-            "  认知重塑 → 方法体系 → 实战演练 → 变现闭环\n"
+            "  认知重塑 → 方法体系 → 实战演练 → 收尾模块\n"
+            "收尾模块根据课程类型决定：\n"
+            "  - 考试/上岗培训类：收尾为『备考应试』（考试重点、题型解析、真题演练、应试技巧）\n"
+            "  - 技能/变现类：收尾为『变现闭环』（变现模式、个人品牌、获客）\n"
             "你擅长：\n"
             "1. 将模糊的知识领域拆解为清晰的学习路径\n"
-            "2. 设计课程钩子，提升完课率和转化率\n"
+            "2. 设计课程钩子，提升完课率与学习动机\n"
             "3. 平衡知识深度和学员接受度\n"
             "你的原则：每节课必须有可量化的学习目标和可操作的课后任务。"
         ),
@@ -52,6 +73,28 @@ def _create_architect_task(agent: Agent, profile: dict, ip_positioning: dict) ->
     style = profile.get("style_preference", "实战干货")
     positioning_statement = ip_positioning.get("positioning_statement", "")
 
+    exam_oriented = _is_exam_oriented(profile)
+    if exam_oriented:
+        fourth_phase = "备考应试"
+        final_hook = "结课与应试动员（鼓励认真备考、顺利通过考试）"
+        mode_note = (
+            "【课程类型】政府/企业强制要求的『上岗/内训考试培训』，学员需通过考试持证。\n"
+            "硬性要求：\n"
+            "1. 模块1必须系统讲清『什么是ESG』——E环境/S社会/G治理三大支柱分别管什么；\n"
+            "   并说明为什么政府/企业要求（政策背景）、ESG实施与信息披露的基础概念。\n"
+            "2. 全程围绕考试知识点与岗位合规操作展开，严禁出现『变现/加薪/副业/个人品牌/获客』等商业化内容。\n"
+            "3. 末模块必须是『备考应试』：考试大纲与重点梳理、常考题型解析、真题/模拟题演练、答题技巧与易错点。"
+        )
+        title_rule = "课程标题要准确清晰、贴合考试培训场景（如『XXX上岗考试通关培训』）"
+    else:
+        fourth_phase = "变现闭环"
+        final_hook = "转化钩子（自然引出进阶服务/产品）"
+        mode_note = (
+            "【课程类型】知识付费/技能变现类课程。\n"
+            "末模块可为『变现闭环』：变现模式、个人品牌、获客等，可包含加薪/副业/变现等商业化内容。"
+        )
+        title_rule = "课程标题要吸引人，不能太学术化"
+
     task_description = f"""
 请基于以下信息，设计一份完整的课程大纲。
 
@@ -63,13 +106,16 @@ def _create_architect_task(agent: Agent, profile: dict, ip_positioning: dict) ->
 - 风格偏好：{style}
 - IP定位：{positioning_statement}
 
+## 课程类型提示
+{mode_note}
+
 ## 设计约束
-1. 必须遵循"认知→方法→实战→变现"四阶递进模型
-2. 总模块数：4-6个（至少包含认知/方法/实战/变现各一个）
+1. 遵循"认知→方法→实战→{fourth_phase}"四阶递进模型
+2. 总模块数：4-6个（至少包含认知/方法/实战/{fourth_phase}各一个）
 3. 每模块课时数：2-4课时
 4. 每课时必须包含：学习目标、3-5个核心要点、可操作的课后任务、预计时长（20-45分钟）
-5. 在模块1第1课时设计"开场钩子"，在最后模块最后课时设计"转化钩子"
-6. 课程标题要吸引人，不能太学术化
+5. 在模块1第1课时设计"开场钩子"，在最后模块最后课时设计"{final_hook}"
+6. {title_rule}
 
 ## 输出格式（严格 JSON）
 ```json
@@ -99,13 +145,13 @@ def _create_architect_task(agent: Agent, profile: dict, ip_positioning: dict) ->
   ],
   "hooks": [
     {{"type": "opening", "location": "M1L1", "content": "开场钩子文案"}},
-    {{"type": "conversion", "location": "M4L3", "content": "转化钩子文案"}}
+    {{"type": "conversion", "location": "M4L3", "content": "结课/收尾钩子文案"}}
   ]
 }}
 ```
 
-注意：phase 必须从 ["认知", "方法", "实战", "变现"] 中选择。
-hook_type 可选值：null（无钩子）、"opening"（开场钩子）、"transition"（过渡钩子）、"conversion"（转化钩子）
+注意：phase 必须从 ["认知", "方法", "实战", "变现", "备考"] 中选择。
+hook_type 可选值：null（无钩子）、"opening"（开场钩子）、"transition"（过渡钩子）、"conversion"（结课/收尾钩子）
 只返回 JSON，不要其他文字。
 """
     return Task(
@@ -123,6 +169,7 @@ def _generate_fallback_outline(profile: dict, ip: dict) -> CourseOutline:
     """当 LLM 不可用时，基于模板生成课程大纲（降级方案）"""
     topic = profile.get("course_topic", "专业技能")
     audience = profile.get("target_audience", "目标学员")
+    exam_oriented = _is_exam_oriented(profile)
 
     modules = [
         {
@@ -191,7 +238,34 @@ def _generate_fallback_outline(profile: dict, ip: dict) -> CourseOutline:
                  "duration_minutes": 35, "hook_type": None},
             ],
         },
-        {
+    ]
+
+    # 第四模块：根据课程类型选择 备考应试 / 变现闭环
+    if exam_oriented:
+        modules.append({
+            "id": "M4", "title": "备考应试：考试重点与真题演练",
+            "description": "梳理考试范围与高频考点，通过真题/模拟演练一次通过",
+            "phase": "备考",
+            "lessons": [
+                {"id": "M4L1", "title": "考试大纲与高频考点梳理",
+                 "learning_objective": "掌握考试大纲结构与必考知识点分布",
+                 "key_points": ["考试大纲结构解读", "E/S/G三大支柱高频考点", "易混淆概念辨析"],
+                 "homework": "对照大纲画出自己的考点地图并标出薄弱项",
+                 "duration_minutes": 35, "hook_type": None},
+                {"id": "M4L2", "title": "常考题型解析与标准答法",
+                 "learning_objective": "熟悉题型与标准答题模板，避免非知识性失分",
+                 "key_points": ["客观题答题技巧", "简答/论述题结构模板", "常见扣分点规避"],
+                 "homework": "用标准模板完成2道典型简答题",
+                 "duration_minutes": 40, "hook_type": None},
+                {"id": "M4L3", "title": "模拟真题演练与应试技巧",
+                 "learning_objective": "通过全真模拟查漏补缺，掌握时间分配与应试节奏",
+                 "key_points": ["一套模拟真题演练", "时间分配策略", "考前心态与复查清单"],
+                 "homework": "完成一套模拟卷并对照解析订正",
+                 "duration_minutes": 30, "hook_type": "conversion"},
+            ],
+        })
+    else:
+        modules.append({
             "id": "M4", "title": "变现闭环：把能力变成可持续收入",
             "description": "将所学技能转化为商业价值",
             "phase": "变现",
@@ -212,14 +286,26 @@ def _generate_fallback_outline(profile: dict, ip: dict) -> CourseOutline:
                  "homework": "制定并公开承诺你的90天行动计划",
                  "duration_minutes": 30, "hook_type": "conversion"},
             ],
-        },
-    ]
+        })
 
     total_lessons = sum(len(m["lessons"]) for m in modules)
     total_duration = sum(l["duration_minutes"] for m in modules for l in m["lessons"])
 
+    if exam_oriented:
+        course_title = f"《{topic}》上岗考试通关培训：从基础到应试"
+        conversion_content = (
+            "恭喜你走完备考全程！最后阶段的关键是『回归大纲、查漏补缺、稳定心态』——"
+            "把每章考点再过一遍，留出时间做1-2套模拟卷，考试当天按答题模板规范作答，你一定能顺利通过。"
+        )
+    else:
+        course_title = f"《{topic}实战训练营》：从入门到变现的系统方法论"
+        conversion_content = (
+            "恭喜你完成了这段学习旅程！但真正的成长才刚刚开始。加入我们的进阶社群，"
+            "获得1v1辅导、资源对接和持续迭代——你的下一个里程碑，我们一起达成。"
+        )
+
     return {
-        "course_title": f"《{topic}实战训练营》：从入门到变现的系统方法论",
+        "course_title": course_title,
         "total_modules": len(modules),
         "total_lessons": total_lessons,
         "total_duration_minutes": total_duration,
@@ -228,7 +314,7 @@ def _generate_fallback_outline(profile: dict, ip: dict) -> CourseOutline:
             {"type": "opening", "location": "M1L1",
              "content": f"你是否花了大量时间学习{topic}，却始终看不到成果？问题不在你，在于方法——今天开始，我们用一套被验证过的系统方法论，重新定义你的学习路径。"},
             {"type": "conversion", "location": "M4L3",
-             "content": "恭喜你完成了这段学习旅程！但真正的成长才刚刚开始。加入我们的进阶社群，获得1v1辅导、资源对接和持续迭代——你的下一个里程碑，我们一起达成。"},
+             "content": conversion_content},
         ],
     }
 
@@ -333,12 +419,13 @@ def _validate_and_fix_outline(outline: dict) -> dict:
         modules = modules[:8]
 
     # 修复每个模块
-    valid_phases = {"认知", "方法", "实战", "变现"}
+    valid_phases = {"认知", "方法", "实战", "变现", "备考"}
     for i, mod in enumerate(modules):
         if "id" not in mod:
             mod["id"] = f"M{i+1}"
         if mod.get("phase") not in valid_phases:
-            phase_map = {0: "认知", 1: "方法", 2: "实战", 3: "变现"}
+            # 第四模块默认『备考应试』（本产品以考试培训为主），其余按序映射
+            phase_map = {0: "认知", 1: "方法", 2: "实战", 3: "备考"}
             mod["phase"] = phase_map.get(i, "方法")
 
         # 修复课时
@@ -369,7 +456,7 @@ def _validate_and_fix_outline(outline: dict) -> dict:
             {"type": "opening", "location": "M1L1",
              "content": "开场钩子：用痛点共鸣抓住学员注意力"},
             {"type": "conversion", "location": f"M{len(modules)}L{len(modules[-1].get('lessons', [{}]))}",
-             "content": "转化钩子：自然引出进阶服务"},
+             "content": "结课钩子：总结课程要点并给出后续学习建议"},
         ]
 
     return outline
