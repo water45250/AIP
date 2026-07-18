@@ -24,13 +24,14 @@ from typing import Optional
 
 from ..graph.state import CourseState
 
-# 打包输出目录
-PACKAGE_DIR = Path("/workspace/aip-core/data/packages")
+# 打包输出目录（必须与容器内可写路径一致；/workspace/ 在容器内不存在且无权限创建）
+PACKAGE_DIR = Path("/app/data/packages")
 
 
 def run_packaging(state: CourseState) -> CourseState:
     """打包交付节点 - LangGraph 节点函数"""
     start_time = time.time()
+    pkg_ok = False
 
     try:
         zip_data = _build_package(state)
@@ -42,6 +43,7 @@ def run_packaging(state: CourseState) -> CourseState:
 
         state["_package_path"] = str(filepath)
         state["_package_size"] = len(zip_data)
+        pkg_ok = True
     except Exception as e:
         state["errors"] = state.get("errors", []) + [{
             "node": "packaging",
@@ -54,7 +56,7 @@ def run_packaging(state: CourseState) -> CourseState:
         "node": "packaging",
         "start": start_time,
         "end": time.time(),
-        "status": "ok",
+        "status": "ok" if pkg_ok else "error",
     }]
 
     return state
