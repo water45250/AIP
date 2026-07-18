@@ -72,6 +72,55 @@ def _call_deepseek(messages: list, temperature: float = 0.3, max_tokens: int = 7
         return None
 
 
+def _apply_option_selection(text: str, last_assistant_message: Optional[str], profile: dict) -> dict:
+    """
+    兜底：当用户只回复 A/B/C/D/E 时，直接根据上一条追问的选项映射字段。
+    避免 LLM 无法从单字母中理解对应含义，导致同一字段反复追问。
+    """
+    if not text or not last_assistant_message:
+        return profile
+    t = text.strip().upper()
+    if len(t) != 1 or t not in "ABCDE":
+        return profile
+
+    def _apply(field: str, options: dict):
+        if profile.get(field):
+            return
+        if t in options:
+            profile[field] = options[t]
+
+    # 交付形式选项（内部提示词是简体）
+    if "交付形式" in last_assistant_message:
+        _apply("delivery_format", {
+            "A": "录播视频",
+            "B": "直播课",
+            "C": "训练营",
+            "D": "图文专栏",
+            "E": "混合",
+        })
+
+    # 风格偏好选项
+    if "风格" in last_assistant_message:
+        _apply("style_preference", {
+            "A": "专业严谨",
+            "B": "轻松幽默",
+            "C": "实战干货",
+            "D": "故事驱动",
+        })
+
+    # 身份选项
+    if "身份" in last_assistant_message:
+        _apply("identity", {
+            "A": "知识博主",
+            "B": "独立讲师",
+            "C": "咨询顾问",
+            "D": "企业培训师",
+            "E": "其他",
+        })
+
+    return profile
+
+
 def _clean_llm_topic(t: Optional[str]) -> Optional[str]:
     """清洗 LLM 输出的课程主题：剔除动词冗余、规整为纯净主题。"""
     if not t:
@@ -462,6 +511,8 @@ def run_requirement_analysis(state: CourseState) -> CourseState:
 
     # 解析用户输入：优先 LLM(DeepSeek) 提取，失败回退正则
     profile = _llm_extract_profile(last_user_message, existing_profile, last_assistant_message)
+    if profile:
+        profile = _apply_option_selection(last_user_message, last_assistant_message, profile)
     if not profile:
         profile = _parse_user_input(last_user_message, existing_profile)
 
@@ -581,4 +632,5 @@ def _generate_profile_summary(profile: UserProfile, completeness: int) -> str:
             parts.append("\n✅ 信息充足，可以开始课程生成。请确认以上信息，或选择修改/跳过。")
 
     return "\n".join(parts)
+
 
