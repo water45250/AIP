@@ -17,7 +17,7 @@ import threading
 from typing import Optional
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -28,6 +28,7 @@ from ..graph.state import HITL_DEFINITIONS, ALL_NODES
 from ..config import MAX_CONCURRENT_SESSIONS, SQLITE_DB_PATH
 from ..content_safety import check_user_input, check_ai_output
 from ..i18n import to_traditional
+from ..digital_human.runninghub_client import RunningHubClient
 from fastapi import Request, Response
 
 # ============================================================
@@ -1033,6 +1034,70 @@ async def voice_test(request: VoiceTestRequest):
         except Exception as e:
             # 前端已统一加「试听合成失败: 」前缀，这里只透传内部错误明细
             raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================
+# F5: 数字人视频生成（RunningHub digital_customize，纯云端 API）
+# ============================================================
+
+_dh_client = RunningHubClient()
+
+
+@app.post("/api/digital-human/generate")
+async def digital_human_generate(
+    image: UploadFile = File(..., description="肖像照（数字人面部）"),
+    audio: UploadFile = File(..., description="旁白音频（CosyVoice2 合成，mp3）"),
+    resolution: str = Form("1280x720", description="输出分辨率，如 1280x720"),
+    prompt: str = Form("", description="视觉风格提示词（可选）"),
+):
+    """提交数字人口播视频生成任务：肖像图 + 旁白音频 -> task_id
+
+    前端契约（DigitalHumanPage.tsx）：
+      FormData: image(文件) / audio(blob,mp3) / resolution / prompt
+      返回: { task_id }
+    """
+    if not image or not getattr(image, "filename", None):
+        raise HTTPException(status_code=400, detail="请上传肖像照（数字人面部）")
+    if not audio or not getattr(audio, "filename", None):
+        raise HTTPException(status_code=400, detail="旁白音频缺失，请先完成语音合成")
+
+    try:
+        image_bytes = await image.read()
+        audio_bytes = await audio.read()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"读取上传文件失败: {str(e)}")
+    finally:
+        try:
+            await image.close()
+            await audio.close()
+        except Exception:
+            pass
+
+    if not image_bytes:
+        raise HTTPException(status_code=400, detail="肖像图内容为空")
+    if not audio_bytes:
+        raise HTTPException(status_code=400, detail="旁白音频内容为空")
+
+    try:
+        task_id = _dh_client.submit(image_bytes, audio_bytes, resolution, prompt)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"提交数字人生成任务失败: {str(e)}")
+
+    return {"task_id": task_id}
+
+
+@app.get("/api/digital-human/task/{task_id}")
+async def digital_human_task(task_id: str):
+    """轮询数字人生成任务状态
+
+    前端契约：返回 { status: 'done'|'failed'|'processing', video_url, error }
+    非 done/failed 的状态视为「继续轮询」。
+    """
+    try:
+        result = _dh_client.get_status(task_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"查询任务状态失败: {str(e)}")
+    return result
 
 
 # ============================================================

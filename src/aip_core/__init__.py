@@ -63,6 +63,17 @@ DUIX_API_KEY = os.getenv("DUIX_API_KEY", "")
 DUIX_DEFAULT_VIDEO = os.getenv("DUIX_DEFAULT_VIDEO", "")
 DUIX_ENABLED = os.getenv("DUIX_ENABLED", "false").lower() == "true"
 
+# === RunningHub 数字人（digital_customize，纯云端 API，服务端零 GPU）===
+# 三项齐全 + RUNNINGHUB_MOCK=false 时启用真实模式；否则 Mock 返回 /static/sample.mp4
+RUNNINGHUB_API_KEY = os.getenv("RUNNINGHUB_API_KEY", "")
+RUNNINGHUB_API_BASE = os.getenv("RUNNINGHUB_API_BASE", "")
+RUNNINGHUB_WORKFLOW_ID = os.getenv("RUNNINGHUB_WORKFLOW_ID", "")
+RUNNINGHUB_SUBMIT_PATH = os.getenv("RUNNINGHUB_SUBMIT_PATH", "/api/openapi/task/run")
+RUNNINGHUB_QUERY_PATH = os.getenv("RUNNINGHUB_QUERY_PATH", "/api/openapi/task/status")
+RUNNINGHUB_MOCK = os.getenv("RUNNINGHUB_MOCK", "true").lower() == "true"  # Q9 未确认前默认 Mock
+RUNNINGHUB_MOCK_DONE_DELAY = float(os.getenv("RUNNINGHUB_MOCK_DONE_DELAY", "2.5"))
+RUNNINGHUB_TIMEOUT = int(os.getenv("RUNNINGHUB_TIMEOUT", "120"))
+
 # === Agent 限制 ===
 MAX_FOLLOWUP_ROUNDS = 4            # 需求追問最多輪數（至少問 2-3 輪才允許跳過）
 REQUIREMENT_MIN_COMPLETENESS = 80  # 需求完整度閾值（至少 6/7 字段≈80% 才放行確認）
